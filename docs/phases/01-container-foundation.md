@@ -52,26 +52,26 @@ Adding a new source or model requires only one new file — the core `SyncEngine
 ### Architecture diagram
 
 ```
-┌─────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────┐
 │                    Sync Service                      │
 │                                                      │
 │  ┌─────────────── SOURCE ADAPTERS ────────────────┐  │
-│  │  CSV │ JSON │ REST API │ MySQL │ MongoDB │ ...  │  │
+│  │  CSV │ JSON │ REST API │ MySQL │ MongoDB │ ... │  │
 │  └───────────────────┬────────────────────────────┘  │
-│                      │ normalized records             │
+│                      │ normalized records            │
 │                      ▼                               │
 │  ┌──────────── SYNC ENGINE ───────────────────────┐  │
-│  │  hash check → upsert → save state             │  │
+│  │  hash check → upsert → save state              │  │
 │  └───────────────────┬────────────────────────────┘  │
 │                      ▼                               │
 │  ┌────────── EMBEDDING ADAPTERS ──────────────────┐  │
-│  │  Ollama │ OpenAI │ Cohere │ ...               │  │
+│  │  Ollama │ OpenAI │ Cohere │ ...                │  │
 │  └───────────────────┬────────────────────────────┘  │
 │                      ▼                               │
 │  ┌─────────────── Weaviate ───────────────────────┐  │
 │  │         vector store + semantic search         │  │
 │  └────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────┘
 ```
 
 ## Key files
