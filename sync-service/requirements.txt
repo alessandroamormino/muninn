@@ -1,0 +1,26 @@
+# Web framework
+fastapi>=0.111.0,<0.200.0
+uvicorn[standard]>=0.29.0,<0.300.0
+
+# Config parsing
+pyyaml>=6.0,<7.0
+pydantic>=2.7.0,<3.0.0
+
+# Weaviate vector database client
+weaviate-client>=4.6.0,<5.0.0
+packaging>=23.0
+
+# Scheduling
+apscheduler>=3.10.0,<4.0.0
+
+# Source adapters
+sqlalchemy>=2.0.0,<3.0.0
+pymongo>=4.7.0,<5.0.0
+requests>=2.31.0,<3.0.0
+
+# File upload
+python-multipart>=0.0.9,<1.0.0
+
+# Knowledge Graph (UMAP + HDBSCAN)
+umap-learn>=0.5.12,<1.0.0
+scikit-learn>=1.8.0,<2.0.0

@@ -1,0 +1,37 @@
+# Secrets — NEVER commit
+.env
+
+# Data files (may contain sensitive information)
+data/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Sync runtime state (generated at runtime)
+sync_state.json
+sync_state.db
+
+# Node.js
+node_modules/
+frontend/dist/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Internal development files
+.planning/
+CLAUDE.md
+.claude/

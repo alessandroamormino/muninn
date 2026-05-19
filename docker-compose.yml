@@ -1,0 +1,69 @@
+services:
+  vector-db:
+    image: semitechnologies/weaviate:1.27.2
+    container_name: vector-db
+    ports:
+      - "8080:8080"    # HTTP API
+      - "50051:50051"  # gRPC API
+    environment:
+      QUERY_DEFAULTS_LIMIT: "25"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      DEFAULT_VECTORIZER_MODULE: "none"
+      ENABLE_MODULES: ""
+      CLUSTER_HOSTNAME: "node1"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  orchestrator:
+    build:
+      context: ./sync-service
+      dockerfile: Dockerfile
+    container_name: orchestrator
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Ollama runs natively on the host — accessible via host.docker.internal.
+      # On Linux (prod/CI), override with: OLLAMA_ENDPOINT=http://embedder:11434
+      OLLAMA_ENDPOINT: "${OLLAMA_ENDPOINT:-http://host.docker.internal:11434}"
+    volumes:
+      - ./configuration:/app/configuration:rw
+      - ./data:/app/data:rw
+      - sync_data:/app/.sync
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      vector-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  weaviate_data:
+    driver: local
+  sync_data:
+    driver: local

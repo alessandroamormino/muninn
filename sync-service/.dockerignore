@@ -1,0 +1,20 @@
+# Secrets — never copy into image (T-02-02 mitigation)
+.env
+*.env
+
+# Python runtime artifacts — not needed in image
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Sync runtime state — not part of image
+sync_state.json
+sync_state.db
+
+# OS / IDE artifacts
+.DS_Store
+.idea/
+.vscode/
