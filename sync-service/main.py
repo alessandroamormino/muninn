@@ -15,7 +15,9 @@ from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
 
-from fastapi import Depends, FastAPI, Response
+from fastapi import Depends, FastAPI, Request, Response
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from auth.dependencies import get_current_user
 from auth.user_store import UserRecord
@@ -26,7 +28,7 @@ from api.setup import router as setup_router
 from api.logs import router as logs_router
 from api.upload import router as upload_router
 from api.graph import router as graph_router
-from api.auth import router as auth_router
+from api.auth import router as auth_router, _limiter as auth_limiter
 from api.admin import router as admin_router
 from auth.user_store import UserStore, RefreshTokenStore
 from scheduler import build_scheduler
@@ -49,6 +51,12 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    jwt_secret = os.getenv("JWT_SECRET", "")
+    if len(jwt_secret) < 32:
+        raise RuntimeError(
+            "JWT_SECRET env var is missing or too short (min 32 chars). "
+            "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
     logger.info("sync-service starting; opening Weaviate client...")
     open_client()
     logger.info("Creating Weaviate collection if missing...")
@@ -118,6 +126,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.state.limiter = auth_limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Register routers (stubs in Phase 1; real implementations added in later phases)
 app.include_router(search_router)

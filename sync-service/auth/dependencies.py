@@ -18,7 +18,8 @@ from auth.user_store import UserRecord
 
 logger = logging.getLogger(__name__)
 
-_JWT_SECRET = os.getenv("JWT_SECRET", "")
+_JWT_SECRET = os.getenv("JWT_SECRET") or ""
+# Validated in main.py lifespan before the server starts accepting requests (CR-01).
 _ALGORITHM = "HS256"
 
 
