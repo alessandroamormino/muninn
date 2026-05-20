@@ -80,9 +80,11 @@ async def list_users(
 async def deactivate_user(
     username: str,
     request: Request,
-    _: UserRecord = Depends(require_admin),
+    caller: UserRecord = Depends(require_admin),
 ) -> dict:
     """Deactivate user (sets is_active=False). Does not delete the record."""
+    if username == caller.username:
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account.")
     user_store = request.app.state.user_store
     ok = user_store.deactivate_user(username)
     if not ok:
@@ -95,9 +97,11 @@ async def update_user(
     username: str,
     body: UpdateUserRequest,
     request: Request,
-    _: UserRecord = Depends(require_admin),
+    caller: UserRecord = Depends(require_admin),
 ) -> dict:
     """Update user role and/or password."""
+    if username == caller.username and body.role is not None and body.role != "admin":
+        raise HTTPException(status_code=400, detail="Cannot demote your own account.")
     user_store = request.app.state.user_store
     if user_store.get_by_username(username) is None:
         raise HTTPException(status_code=404, detail=f"User '{username}' not found")
