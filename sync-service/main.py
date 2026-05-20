@@ -8,6 +8,7 @@ Configuration is loaded from config.yaml via config.settings at import time.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,6 +23,9 @@ from api.setup import router as setup_router
 from api.logs import router as logs_router
 from api.upload import router as upload_router
 from api.graph import router as graph_router
+from api.auth import router as auth_router
+from api.admin import router as admin_router
+from auth.user_store import UserStore, RefreshTokenStore
 from scheduler import build_scheduler
 from sync.log_store import LogStore
 from config.settings import settings
@@ -74,6 +78,20 @@ async def lifespan(app: FastAPI):
     app.state.log_store = log_store
     app.state.upload_status = None  # updated by POST /upload and POST /upload/confirm — D-08
     logger.info("LogStore ready at /app/.sync/sync_logs.db")
+    # Auth stores (D-03, D-05)
+    user_store = UserStore(Path("/app/.sync/users.db"))
+    token_store = RefreshTokenStore(user_store._conn)
+    app.state.user_store = user_store
+    app.state.token_store = token_store
+    app.state.tmp_tokens = {}  # dict: {tmp_token_str: {username, expires_at}}
+    # Seed first admin from env if users.db is empty (D-05)
+    if user_store.is_empty():
+        admin_username = os.getenv("ADMIN_USERNAME", "admin")
+        admin_password = os.getenv("ADMIN_PASSWORD", "changeme")
+        user_store.create_user(admin_username, admin_password, "admin")
+        logger.info("First admin user %r seeded from env (D-05).", admin_username)
+    else:
+        logger.info("UserStore already has users — skipping seed.")
     logger.info("SyncEngine pronto.")
     yield
     # Shutdown
@@ -83,6 +101,8 @@ async def lifespan(app: FastAPI):
         logger.info("APScheduler stopped.")
     app.state.log_store.close()
     logger.info("LogStore closed.")
+    app.state.user_store.close()
+    logger.info("UserStore closed.")
     close_client()
 
 
@@ -103,6 +123,8 @@ app.include_router(setup_router)
 app.include_router(logs_router)
 app.include_router(upload_router)
 app.include_router(graph_router)
+app.include_router(auth_router)
+app.include_router(admin_router)
 
 
 @app.get("/health")
