@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 _DB_PATH = Path("/app/.sync/users.db")
 
 _PWD_CTX = CryptContext(schemes=["bcrypt"], deprecated="auto")
-# Pre-computed hash used when the username does not exist, so that the response
-# time for unknown usernames matches that for wrong passwords (WR-06).
-_DUMMY_HASH = _PWD_CTX.hash("dummy")
+# Hardcoded bcrypt hash used for constant-time dummy verification (WR-06).
+# Pre-computed to avoid module-load cost and bcrypt 4.x/passlib detection issues.
+_DUMMY_HASH = "$2b$12$KIX1LiXNDUn5RsqfUJ8fj.bQxDTPPQEF3LFU8GDVqLAJZmHF7Wmvy"
 
 _CREATE_USERS = """
 CREATE TABLE IF NOT EXISTS users (
