@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { fetchJson } from './fetchJson'
+import { createApiClient } from './fetchJson'
+import { useAuth } from '../context/AuthContext'
 
 export interface RestApiPayload {
   collection: string
@@ -19,6 +20,10 @@ export interface RestApiPayload {
 
 export function useCreateRestApiEntity() {
   const qc = useQueryClient()
+  const { token } = useAuth()
+  const on401 = () => (window as Record<string, unknown>)['__on401']?.()
+  const fetchJson = createApiClient(token, on401 as () => void)
+
   return useMutation({
     mutationFn: (payload: RestApiPayload) =>
       fetchJson<{ status: string; collection: string; config_path: string }>(

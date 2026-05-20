@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { fetchJson } from './fetchJson'
+import { createApiClient } from './fetchJson'
+import { useAuth } from '../context/AuthContext'
 
 export interface GraphNode {
   id: string
@@ -25,6 +26,10 @@ export interface GraphResponse {
 }
 
 export function useGraph(collection: string | null) {
+  const { token } = useAuth()
+  const on401 = () => (window as Record<string, unknown>)['__on401']?.()
+  const fetchJson = createApiClient(token, on401 as () => void)
+
   return useQuery({
     queryKey: ['graph', collection],
     queryFn: () => fetchJson<GraphResponse>(`/api/graph/${encodeURIComponent(collection!)}`),

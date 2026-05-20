@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { fetchJson } from './fetchJson'
+import { createApiClient } from './fetchJson'
+import { useAuth } from '../context/AuthContext'
 
 export interface SearchResult {
   _score: number
@@ -21,6 +22,10 @@ export interface SearchParams {
 }
 
 export function useSearch(params: SearchParams) {
+  const { token } = useAuth()
+  const on401 = () => (window as Record<string, unknown>)['__on401']?.()
+  const fetchJson = createApiClient(token, on401 as () => void)
+
   const enabled = !!params.q && !!params.collection
   const qs = new URLSearchParams()
   if (params.q) qs.set('q', params.q)

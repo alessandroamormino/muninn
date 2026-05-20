@@ -7,7 +7,10 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
+
+from auth.dependencies import get_current_user
+from auth.user_store import UserRecord
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/logs", tags=["logs"])
@@ -19,6 +22,7 @@ async def get_sync_logs(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     status: Annotated[str | None, Query(pattern="^(completed|failed|skipped)$")] = None,
     collection: Annotated[str | None, Query()] = None,
+    _: UserRecord = Depends(get_current_user),
 ) -> list[dict]:
     """Return sync run history, newest first.
 
@@ -32,7 +36,7 @@ async def get_sync_logs(
 
 
 @router.get("/sync/latest")
-async def get_latest_sync(request: Request) -> dict | None:
+async def get_latest_sync(request: Request, _: UserRecord = Depends(get_current_user)) -> dict | None:
     """Return the single most-recent sync run record, or null if no runs yet."""
     log_store = request.app.state.log_store
     return log_store.get_latest()

@@ -22,8 +22,11 @@ from typing import Optional
 
 import numpy as np
 import umap
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sklearn.cluster import HDBSCAN
+
+from auth.dependencies import get_current_user
+from auth.user_store import UserRecord
 
 from config.settings import _CONFIG_PATH, settings
 from llm.ollama_llm import LLMError, OllamaLLMClient
@@ -50,7 +53,7 @@ def _validate_collection_name(name: str) -> None:
 
 
 @router.get("/collections")
-async def list_collections() -> dict:
+async def list_collections(_: UserRecord = Depends(get_current_user)) -> dict:
     """List all configured collections by scanning configuration/ subdirectories.
 
     Returns {"collections": [...]} sorted alphabetically.
@@ -70,6 +73,7 @@ async def list_collections() -> dict:
 async def get_graph(
     collection: str,
     max_nodes: int = Query(default=2000, ge=10, le=2000),
+    _: UserRecord = Depends(get_current_user),
 ) -> dict:
     """Compute and return a knowledge graph for the given Weaviate collection.
 
