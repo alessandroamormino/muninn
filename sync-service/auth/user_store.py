@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 _DB_PATH = Path("/app/.sync/users.db")
 
 _PWD_CTX = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Pre-computed hash used when the username does not exist, so that the response
+# time for unknown usernames matches that for wrong passwords (WR-06).
+_DUMMY_HASH = _PWD_CTX.hash("dummy")
 
 _CREATE_USERS = """
 CREATE TABLE IF NOT EXISTS users (
@@ -96,6 +99,11 @@ class UserStore:
         row = cur.fetchone()
         return self._row_to_user(row) if row else None
 
+    def get_by_id(self, user_id: int) -> Optional[UserRecord]:
+        cur = self._conn.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+        return self._row_to_user(row) if row else None
+
     def create_user(self, username: str, password: str, role: str) -> UserRecord:
         if role not in ("reader", "admin"):
             raise ValueError(f"Invalid role: {role!r}. Must be 'reader' or 'admin'.")
@@ -116,7 +124,11 @@ class UserStore:
 
     def verify_password(self, username: str, plain_password: str) -> Optional[UserRecord]:
         user = self.get_by_username(username)
-        if user is None or not user.is_active:
+        if user is None:
+            _PWD_CTX.verify(plain_password, _DUMMY_HASH)  # constant-time dummy check
+            return None
+        if not user.is_active:
+            _PWD_CTX.verify(plain_password, user.hashed_password)  # constant-time even for inactive
             return None
         if not _PWD_CTX.verify(plain_password, user.hashed_password):
             return None
@@ -149,18 +161,18 @@ class UserStore:
         if not fields:
             return False
         values.append(username)
-        self._conn.execute(
+        cur = self._conn.execute(
             f"UPDATE users SET {', '.join(fields)} WHERE username = ?", values
         )
         self._conn.commit()
-        return self._conn.total_changes > 0
+        return cur.rowcount > 0
 
     def deactivate_user(self, username: str) -> bool:
-        self._conn.execute(
+        cur = self._conn.execute(
             "UPDATE users SET is_active = 0 WHERE username = ?", (username,)
         )
         self._conn.commit()
-        return self._conn.total_changes > 0
+        return cur.rowcount > 0
 
     def list_users(self) -> list[UserRecord]:
         cur = self._conn.execute(
@@ -205,9 +217,9 @@ class RefreshTokenStore:
 
     def revoke(self, raw_token: str) -> bool:
         token_hash = _sha256(raw_token)
-        self._conn.execute(
+        cur = self._conn.execute(
             "UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ?",
             (token_hash,),
         )
         self._conn.commit()
-        return self._conn.total_changes > 0
+        return cur.rowcount > 0
