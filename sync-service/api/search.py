@@ -21,10 +21,12 @@ import re
 import time
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import weaviate.classes.query as _wvc_query
 
+from auth.dependencies import get_current_user
+from auth.user_store import UserRecord
 from config.settings import _CONFIG_PATH, load_config, settings
 from weaviate_store.client import get_client
 
@@ -60,6 +62,7 @@ async def search(
         default=None,
         description="Nome della collection Weaviate (es. 'Collaboratori'). Se omesso usa config.yaml globale.",
     ),
+    _user: UserRecord = Depends(get_current_user),
 ) -> dict:
     """Ricerca ibrida (BM25 + semantica). Ritorna {query, results:[{...props, _score}, ...]}."""
     # --- Per-entity config resolution ----------------------------------------

@@ -10,8 +10,10 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
+from auth.dependencies import get_current_user, require_admin
+from auth.user_store import UserRecord
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -97,7 +99,7 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
 
 
 @router.post("/sync")
-async def trigger_sync(request: Request, background_tasks: BackgroundTasks) -> dict:
+async def trigger_sync(request: Request, background_tasks: BackgroundTasks, _: UserRecord = Depends(require_admin)) -> dict:
     """Avvia un sync incrementale in background."""
     if not request.app.state.sync_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Sync already in progress")
@@ -111,7 +113,7 @@ async def trigger_sync(request: Request, background_tasks: BackgroundTasks) -> d
 
 
 @router.post("/sync/full")
-async def trigger_full_sync(request: Request, background_tasks: BackgroundTasks) -> dict:
+async def trigger_full_sync(request: Request, background_tasks: BackgroundTasks, _: UserRecord = Depends(require_admin)) -> dict:
     """Avvia un full re-index in background."""
     if not request.app.state.sync_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Sync already in progress")
@@ -125,6 +127,6 @@ async def trigger_full_sync(request: Request, background_tasks: BackgroundTasks)
 
 
 @router.get("/sync/status")
-async def sync_status(request: Request) -> dict:
+async def sync_status(request: Request, _: UserRecord = Depends(get_current_user)) -> dict:
     """Restituisce lo stato corrente e le statistiche dell'ultimo sync."""
     return request.app.state.sync_status

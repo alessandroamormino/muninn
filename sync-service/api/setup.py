@@ -12,8 +12,11 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from auth.dependencies import require_admin
+from auth.user_store import UserRecord
 
 from config.settings import settings
 from llm.ollama_llm import LLMError, OllamaLLMClient
@@ -116,7 +119,7 @@ def _validate_suggested_fields(suggested: dict, headers: list[str]) -> None:
 
 
 @router.post("/setup/suggest-config")
-def suggest_config(body: SuggestConfigRequest) -> dict:
+def suggest_config(body: SuggestConfigRequest, _: UserRecord = Depends(require_admin)) -> dict:
     """Analizza un CSV e suggerisce una configurazione Weaviate.
 
     Il path deve puntare a un file in /app/data/. L'endpoint e' read-only:

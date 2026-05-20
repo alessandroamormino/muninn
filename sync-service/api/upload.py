@@ -10,8 +10,11 @@ import yaml
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, field_validator
+
+from auth.dependencies import get_current_user, require_admin
+from auth.user_store import UserRecord
 
 from config.settings import _CONFIG_PATH, load_config, settings
 from sync.engine import SyncEngine
@@ -242,6 +245,7 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "")
 async def upload_file(
     request: Request,
     file: Annotated[UploadFile, File(description="CSV file to index")],
+    _: UserRecord = Depends(require_admin),
 ) -> dict:
     """Receive a CSV file, save to /app/data/, run LLM suggest-config, return suggestion."""
     # Content-type check — D-11: CSV only
@@ -324,6 +328,7 @@ async def confirm_upload(
     request: Request,
     background_tasks: BackgroundTasks,
     body: ConfirmRequest,
+    _: UserRecord = Depends(require_admin),
 ) -> dict:
     """Write per-entity config.yaml and start a full sync in background. D-05/D-06."""
     # CR-03: lock_acquired flag ensures only one code path owns the release.
@@ -362,13 +367,13 @@ async def confirm_upload(
 
 
 @router.get("/upload/status")
-async def upload_status(request: Request) -> dict:
+async def upload_status(request: Request, _: UserRecord = Depends(get_current_user)) -> dict:
     """Returns in-memory upload state. None before first upload. D-08/D-09."""
     return request.app.state.upload_status or {}
 
 
 @router.post("/upload/restapi")
-async def create_restapi_entity(request: Request, body: ConfirmRestApiRequest) -> dict:
+async def create_restapi_entity(request: Request, body: ConfirmRestApiRequest, _: UserRecord = Depends(require_admin)) -> dict:
     """Write per-entity config.yaml for a REST API source. D-19/D-20: stores only env var NAME."""
     # Build auth dict — D-20: token is a ${VAR} placeholder, never the actual value
     auth_dict: dict = {"type": body.auth_type}
@@ -409,6 +414,7 @@ async def trigger_full_sync_by_collection(
     request: Request,
     background_tasks: BackgroundTasks,
     collection: Annotated[str, Query(min_length=1)],
+    _: UserRecord = Depends(require_admin),
 ) -> dict:
     """Trigger a full sync for a specific collection. T-11-07: validates collection name."""
     if not _COLLECTION_RE.match(collection):

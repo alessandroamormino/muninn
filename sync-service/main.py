@@ -15,7 +15,10 @@ from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
 
-from fastapi import FastAPI, Response
+from fastapi import Depends, FastAPI, Response
+
+from auth.dependencies import get_current_user
+from auth.user_store import UserRecord
 
 from api.search import router as search_router
 from api.sync import router as sync_router
@@ -145,7 +148,7 @@ async def health(response: Response) -> dict:
 
 
 @app.get("/info")
-async def info() -> dict:
+async def info(_: UserRecord = Depends(get_current_user)) -> dict:
     """Service info. Adds total_objects from a live aggregate query.
 
     Per CONTEXT.md D-06: total_objects is null on any Weaviate failure rather
