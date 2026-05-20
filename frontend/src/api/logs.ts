@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { fetchJson } from './fetchJson'
+import { createApiClient } from './fetchJson'
+import { useAuth } from '../context/AuthContext'
 
 export interface LogRun {
   id: number
@@ -20,6 +21,10 @@ export interface LogRun {
 }
 
 export function useLogs(collection: string | null, limit = 50) {
+  const { token } = useAuth()
+  const on401 = () => (window as Record<string, unknown>)['__on401']?.()
+  const fetchJson = createApiClient(token, on401 as () => void)
+
   const qs = new URLSearchParams()
   qs.set('limit', String(limit))
   if (collection) qs.set('collection', collection)
