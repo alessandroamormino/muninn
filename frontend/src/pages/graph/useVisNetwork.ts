@@ -26,6 +26,7 @@ const VIS_OPTIONS: Options = {
     borderWidth: 1,
     borderWidthSelected: 2,
     color: { border: 'rgba(0,0,0,0.2)' },
+    chosen: false,
   },
   edges: {
     color: { color: '#e2e8f0', opacity: 0.8 },
