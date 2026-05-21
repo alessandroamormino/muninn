@@ -204,19 +204,12 @@ export function useVisNetwork(
       network.stopSimulation()
     })
 
-    // Pin dragged nodes in place; re-stop simulation so physics doesn't restart.
+    // After drag: stop simulation so nodes don't drift.
+    // Do NOT set fixed:{x,y} — that would prevent the user from re-dragging the node.
+    // stopSimulation() is sufficient: nodes stay where dropped since physics is off.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     network.on('dragEnd', (params: any) => {
       if (!params.nodes.length) return  // viewport pan, not a node drag
-      params.nodes.forEach((nodeId: string | number) => {
-        const pos = network.getPosition(nodeId)
-        nodesDataSet.update({
-          id: nodeId,
-          x: pos.x,
-          y: pos.y,
-          fixed: { x: true, y: true },
-        } as VisNode)
-      })
       network.stopSimulation()
     })
 
