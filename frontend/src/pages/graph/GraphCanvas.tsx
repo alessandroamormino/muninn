@@ -4,6 +4,41 @@ import { useVisNetwork } from './useVisNetwork'
 import NodeSidebar from './NodeSidebar'
 import ClusterLegend from './ClusterLegend'
 
+function computeClusterNames(
+  nodes: Array<{ cluster: number; props: Record<string, unknown> }>
+): Map<number, string> {
+  const groups = new Map<number, typeof nodes>()
+  nodes.forEach(n => {
+    if (!groups.has(n.cluster)) groups.set(n.cluster, [])
+    groups.get(n.cluster)!.push(n)
+  })
+  const names = new Map<number, string>()
+  groups.forEach((clusterNodes, clusterId) => {
+    if (clusterId < 0) { names.set(clusterId, 'Noise'); return }
+    const counts: Record<string, Record<string, number>> = {}
+    clusterNodes.forEach(n => {
+      Object.entries(n.props).forEach(([key, val]) => {
+        if (!val || typeof val !== 'string') return
+        if (val.length < 2 || val.length > 50) return
+        if (/^[0-9a-f-]{36}$/i.test(val)) return
+        if (/^\d+$/.test(val)) return
+        if (!counts[key]) counts[key] = {}
+        counts[key][val] = (counts[key][val] ?? 0) + 1
+      })
+    })
+    let bestName = ''
+    let bestCount = 0
+    Object.values(counts).forEach(valCounts => {
+      Object.entries(valCounts).forEach(([val, cnt]) => {
+        if (cnt / clusterNodes.length >= 0.4 && cnt > bestCount) {
+          bestCount = cnt; bestName = val
+        }
+      })
+    })
+    names.set(clusterId, bestName || `Cluster ${clusterId}`)
+  })
+  return names
+}
 
 interface Props {
   data: GraphResponse
@@ -50,7 +85,7 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
     )
   }
 
-  const { resetZoom, zoomToCluster, zoomToNode, clusterNamesRef } = useVisNetwork(
+  const { resetZoom, zoomToCluster, zoomToNode } = useVisNetwork(
     containerRef,
     data,
     setSelected,
@@ -90,7 +125,23 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
     return adj
   }, [data.edges])
 
-  const clusterNames = clusterNamesRef.current
+  const clusterNames = useMemo(() => computeClusterNames(data.nodes), [data.nodes])
+
+  // Extract filterable fields: string values, not UUIDs, 2–30 unique values
+  const filterFields = useMemo(() => {
+    const fieldValues = new Map<string, Set<string>>()
+    data.nodes.forEach(n => {
+      Object.entries(n.props).forEach(([key, val]) => {
+        if (typeof val !== 'string' || val.length > 60 || /^[0-9a-f-]{36}$/i.test(val)) return
+        if (!fieldValues.has(key)) fieldValues.set(key, new Set())
+        fieldValues.get(key)!.add(val)
+      })
+    })
+    return [...fieldValues.entries()]
+      .filter(([, vals]) => vals.size >= 2 && vals.size <= 30)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([field, vals]) => ({ field, values: [...vals].sort() }))
+  }, [data.nodes])
 
   const selectedNeighbors = useMemo(() => {
     if (!selected) return []
@@ -117,7 +168,38 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
   )
 
   return (
-    <div className="relative h-full w-full">
+    <div className="h-full w-full flex flex-col">
+
+      {/* Filter bar — above the graph */}
+      {filterFields.length > 0 && (
+        <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-card flex-shrink-0 overflow-x-auto">
+          <span className="text-xs text-muted-foreground flex-shrink-0">Filters:</span>
+          {filterFields.map(({ field, values }) => (
+            <select
+              key={field}
+              value={activeFieldFilter?.field === field ? activeFieldFilter.value : ''}
+              onChange={e => {
+                if (!e.target.value) { setActiveFieldFilter(null) }
+                else { handleHighlight(field, e.target.value) }
+              }}
+              className="text-xs h-6 rounded border bg-background px-1 pr-5 cursor-pointer flex-shrink-0"
+            >
+              <option value="">{field}</option>
+              {values.map(v => <option key={v} value={v}>{v}</option>)}
+            </select>
+          ))}
+          {activeFieldFilter && (
+            <button
+              onClick={() => setActiveFieldFilter(null)}
+              className="text-xs text-muted-foreground hover:text-foreground flex-shrink-0"
+            >
+              ✕ clear
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="relative flex-1">
 
       {/* Cluster legend — top-left */}
       <ClusterLegend
@@ -146,20 +228,17 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
         </div>
       )}
 
-      {/* Active filter clear button — bottom-right */}
-      {(activeClusterFilter !== null || activeFieldFilter) && (
+      {/* Active cluster filter badge — bottom-right */}
+      {activeClusterFilter !== null && (
         <button
-          onClick={() => { setActiveClusterFilter(null); setActiveFieldFilter(null) }}
+          onClick={() => setActiveClusterFilter(null)}
           className="absolute bottom-2 right-2 z-10 bg-card/90 border rounded px-2 py-1 text-xs hover:bg-accent transition-colors"
         >
-          ✕ {activeClusterFilter !== null
-            ? `Cluster: ${enrichedClusters.find(c => c.id === activeClusterFilter)?.name ?? activeClusterFilter}`
-            : `${activeFieldFilter!.field}: ${activeFieldFilter!.value}`}
+          ✕ Cluster: {enrichedClusters.find(c => c.id === activeClusterFilter)?.name ?? activeClusterFilter}
         </button>
       )}
 
-      {/* Right detail panel — absolute like ClusterLegend, slides in via CSS transform.
-          pointer-events-none when hidden so canvas clicks pass through. */}
+      {/* Right detail panel */}
       <div
         className={`absolute top-2 bottom-2 right-2 z-10 w-80 border rounded-md bg-card overflow-hidden
           transition-transform duration-300 ease-in-out
@@ -176,6 +255,7 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
         />
       </div>
 
+      </div>{/* end relative flex-1 */}
     </div>
   )
 }

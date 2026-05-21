@@ -31,6 +31,9 @@ const VIS_OPTIONS: Options = {
     color: { color: '#e2e8f0', opacity: 0.8 },
     width: 0.5,
     smooth: false,
+    chosen: false,
+    hoverWidth: 0,
+    selectionWidth: 0,
   },
   physics: {
     solver: 'forceAtlas2Based',
@@ -55,6 +58,8 @@ const VIS_OPTIONS: Options = {
     dragNodes: true,
     dragView: true,
     zoomView: true,
+    hoverConnectedEdges: false,
+    selectConnectedEdges: false,
   },
 }
 
