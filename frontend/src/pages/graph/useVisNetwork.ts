@@ -204,6 +204,11 @@ export function useVisNetwork(
       network.stopSimulation()
     })
 
+    // Kill physics immediately on drag start so only the dragged node moves.
+    // vis-network auto-calls startSimulation() on dragStart, causing all nodes
+    // to spring around. Stopping it right away prevents that.
+    network.on('dragStart', () => network.stopSimulation())
+
     // After drag: stop simulation so nodes don't drift.
     // Do NOT set fixed:{x,y} — that would prevent the user from re-dragging the node.
     // stopSimulation() is sufficient: nodes stay where dropped since physics is off.
