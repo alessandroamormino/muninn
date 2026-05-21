@@ -12,6 +12,7 @@ import logging
 import os
 
 from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import ExpiredSignatureError, JWTError, jwt
 
 from auth.user_store import UserRecord
@@ -22,22 +23,26 @@ _JWT_SECRET = os.getenv("JWT_SECRET") or ""
 # Validated in main.py lifespan before the server starts accepting requests (CR-01).
 _ALGORITHM = "HS256"
 
+_bearer_scheme = HTTPBearer(auto_error=False)
 
-def get_current_user(request: Request) -> UserRecord:
+
+def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> UserRecord:
     """Decode JWT from Authorization: Bearer header.
 
     Raises:
         401 — missing header, malformed token, or invalid signature
         401 with detail 'Token scaduto' — token expired (D-19)
     """
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = auth_header[len("Bearer "):]
+    token = credentials.credentials
     try:
         payload = jwt.decode(token, _JWT_SECRET, algorithms=[_ALGORITHM])
     except ExpiredSignatureError:
