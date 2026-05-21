@@ -1,8 +1,49 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import type { GraphResponse, GraphNode } from '@/api/graph'
-import { useGraphRender, computeClusterNames } from './useGraphRender'
+import { useVisNetwork } from './useVisNetwork'
 import NodeSidebar from './NodeSidebar'
 import ClusterLegend from './ClusterLegend'
+
+function computeClusterNames(nodes: Array<{ cluster: number; props: Record<string, unknown> }>): Map<number, string> {
+  const groups = new Map<number, Array<{ cluster: number; props: Record<string, unknown> }>>()
+  nodes.forEach(n => {
+    if (!groups.has(n.cluster)) groups.set(n.cluster, [])
+    groups.get(n.cluster)!.push(n)
+  })
+
+  const names = new Map<number, string>()
+  groups.forEach((clusterNodes, clusterId) => {
+    if (clusterId < 0) { names.set(clusterId, 'Noise'); return }
+
+    const counts: Record<string, Record<string, number>> = {}
+    clusterNodes.forEach(n => {
+      Object.entries(n.props).forEach(([key, val]) => {
+        if (!val || typeof val !== 'string') return
+        if (val.length < 2 || val.length > 50) return
+        if (/^[0-9a-f-]{36}$/i.test(val)) return // skip UUIDs
+        if (/^\d+$/.test(val)) return // skip pure numbers
+        if (!counts[key]) counts[key] = {}
+        counts[key][val] = (counts[key][val] ?? 0) + 1
+      })
+    })
+
+    let bestName = ''
+    let bestCount = 0
+    Object.values(counts).forEach(valCounts => {
+      Object.entries(valCounts).forEach(([val, cnt]) => {
+        const coverage = cnt / clusterNodes.length
+        if (coverage >= 0.4 && cnt > bestCount) {
+          bestCount = cnt
+          bestName = val
+        }
+      })
+    })
+
+    names.set(clusterId, bestName || `Cluster ${clusterId}`)
+  })
+
+  return names
+}
 
 interface Props {
   data: GraphResponse
@@ -11,7 +52,7 @@ interface Props {
 }
 
 export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
-  const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const [selected, setSelected] = useState<GraphNode | null>(null)
   const [activeClusterFilter, setActiveClusterFilter] = useState<number | null>(null)
   const [activeFieldFilter, setActiveFieldFilter] = useState<{ field: string; value: string } | null>(null)
@@ -49,14 +90,13 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
     )
   }
 
-  const { resetZoom, zoomToCluster, zoomToNode } = useGraphRender({
-    canvas,
+  const { resetZoom, zoomToCluster, zoomToNode, clusterNamesRef } = useVisNetwork(
+    containerRef,
     data,
-    onNodeClick: setSelected,
+    setSelected,
     highlightedIds,
     filterFn,
-    selectedNodeId: selected?.id,
-  })
+  )
 
   // Expose resetZoom to parent via ref
   useEffect(() => {
@@ -66,7 +106,7 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
   const handleClusterClick = (clusterId: number) => {
     setActiveFieldFilter(null)
     setActiveClusterFilter(prev => prev === clusterId ? null : clusterId)
-    zoomToCluster(clusterId)
+    zoomToCluster(clusterId, data.nodes)
   }
 
   useEffect(() => {
@@ -74,7 +114,7 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
     const firstId = [...highlightedIds][0]
     const firstNode = data.nodes.find(n => n.id === firstId)
     if (firstNode) {
-      const t = setTimeout(() => zoomToNode(firstId, firstNode.x, firstNode.y), 100)
+      const t = setTimeout(() => zoomToNode(firstId), 100)
       return () => clearTimeout(t)
     }
   }, [highlightedIds]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -90,7 +130,7 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
     return adj
   }, [data.edges])
 
-  const clusterNames = useMemo(() => computeClusterNames(data.nodes), [data.nodes])
+  const clusterNames = clusterNamesRef.current
 
   const selectedNeighbors = useMemo(() => {
     if (!selected) return []
@@ -126,10 +166,10 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
         activeClusterId={activeClusterFilter}
       />
 
-      {/* Canvas — always full size, never resized by sidebar */}
-      <canvas
-        ref={setCanvas}
-        className="block w-full h-full bg-card cursor-grab active:cursor-grabbing"
+      {/* Graph container — vis-network manages cursor and rendering internally */}
+      <div
+        ref={containerRef}
+        className="block w-full h-full bg-card"
         role="img"
         aria-label={`Knowledge graph with ${data.nodes.length} nodes and ${data.edges.length} edges`}
       />
