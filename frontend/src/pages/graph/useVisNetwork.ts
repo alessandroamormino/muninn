@@ -179,19 +179,32 @@ export function useVisNetwork(
     nodesDataSetRef.current = nodesDataSet
     edgesDataSetRef.current = edgesDataSet
 
+    // Use explicit pixel dimensions so vis-network never reads a wrong clientHeight
+    // during a React re-render that happens to fall mid-stabilization.
+    // autoResize:false + fixed px → canvas size is locked at creation time.
+    const cw = containerRef.current.clientWidth || containerRef.current.offsetWidth
+    const ch = containerRef.current.clientHeight || containerRef.current.offsetHeight
+    const initOptions: Options = {
+      ...VIS_OPTIONS,
+      width: cw > 0 ? `${cw}px` : '100%',
+      height: ch > 0 ? `${ch}px` : '100%',
+    }
+
     const network = new Network(
       containerRef.current,
       { nodes: nodesDataSet, edges: edgesDataSet },
-      VIS_OPTIONS,
+      initOptions,
     )
     networkRef.current = network
 
-    // Freeze physics after initial layout so nodes settle and stop jittering
+    // Stop the simulation loop without triggering a full setOptions redraw cycle.
+    // setOptions({physics:{enabled:false}}) internally calls initPhysics + canvas
+    // setSize which races with React re-renders and causes "Canvas exceeds max size".
     network.on('stabilizationIterationsDone', () => {
-      network.setOptions({ physics: { enabled: false } })
+      network.stopSimulation()
     })
 
-    // Pin dragged nodes in place — prevents them drifting back after drag release
+    // Pin dragged nodes in place; re-stop simulation so physics doesn't restart.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     network.on('dragEnd', (params: any) => {
       if (!params.nodes.length) return  // viewport pan, not a node drag
@@ -204,6 +217,7 @@ export function useVisNetwork(
           fixed: { x: true, y: true },
         } as VisNode)
       })
+      network.stopSimulation()
     })
 
     // Click on node → open NodeSidebar via onNodeClick callback
