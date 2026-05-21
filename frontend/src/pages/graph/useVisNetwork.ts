@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { MutableRefObject } from 'react'
-import { Network } from 'vis-network/peer/esm/vis-network'
-import { DataSet } from 'vis-data/peer/esm/vis-data'
+import { Network } from 'vis-network'
+import { DataSet } from 'vis-data'
 import type { Options, Node as VisNode, Edge as VisEdge } from 'vis-network'
 import type { GraphResponse, GraphNode } from '@/api/graph'
 import { colorForCluster } from './ClusterLegend'
@@ -30,7 +30,7 @@ const VIS_OPTIONS: Options = {
   edges: {
     color: { color: '#e2e8f0', opacity: 0.8 },
     width: 0.5,
-    smooth: { enabled: false, type: 'dynamic' },
+    smooth: false,
   },
   physics: {
     solver: 'forceAtlas2Based',
@@ -186,7 +186,8 @@ export function useVisNetwork(
     })
 
     // Pin dragged nodes in place — prevents them drifting back after drag release
-    network.on('dragEnd', (params) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    network.on('dragEnd', (params: any) => {
       if (!params.nodes.length) return  // viewport pan, not a node drag
       params.nodes.forEach((nodeId: string | number) => {
         const pos = network.getPosition(nodeId)
@@ -200,7 +201,8 @@ export function useVisNetwork(
     })
 
     // Click on node → open NodeSidebar via onNodeClick callback
-    network.on('click', (params) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    network.on('click', (params: any) => {
       if (!params.nodes.length) return  // background click — ignore
       const nodeId = params.nodes[0] as string
       const original = data.nodes.find(n => n.id === nodeId)

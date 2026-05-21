@@ -4,46 +4,6 @@ import { useVisNetwork } from './useVisNetwork'
 import NodeSidebar from './NodeSidebar'
 import ClusterLegend from './ClusterLegend'
 
-function computeClusterNames(nodes: Array<{ cluster: number; props: Record<string, unknown> }>): Map<number, string> {
-  const groups = new Map<number, Array<{ cluster: number; props: Record<string, unknown> }>>()
-  nodes.forEach(n => {
-    if (!groups.has(n.cluster)) groups.set(n.cluster, [])
-    groups.get(n.cluster)!.push(n)
-  })
-
-  const names = new Map<number, string>()
-  groups.forEach((clusterNodes, clusterId) => {
-    if (clusterId < 0) { names.set(clusterId, 'Noise'); return }
-
-    const counts: Record<string, Record<string, number>> = {}
-    clusterNodes.forEach(n => {
-      Object.entries(n.props).forEach(([key, val]) => {
-        if (!val || typeof val !== 'string') return
-        if (val.length < 2 || val.length > 50) return
-        if (/^[0-9a-f-]{36}$/i.test(val)) return // skip UUIDs
-        if (/^\d+$/.test(val)) return // skip pure numbers
-        if (!counts[key]) counts[key] = {}
-        counts[key][val] = (counts[key][val] ?? 0) + 1
-      })
-    })
-
-    let bestName = ''
-    let bestCount = 0
-    Object.values(counts).forEach(valCounts => {
-      Object.entries(valCounts).forEach(([val, cnt]) => {
-        const coverage = cnt / clusterNodes.length
-        if (coverage >= 0.4 && cnt > bestCount) {
-          bestCount = cnt
-          bestName = val
-        }
-      })
-    })
-
-    names.set(clusterId, bestName || `Cluster ${clusterId}`)
-  })
-
-  return names
-}
 
 interface Props {
   data: GraphResponse
