@@ -24,7 +24,7 @@ function AppRoutes() {
   // This avoids prop-drilling through every page component.
   // Usage: import { getOn401 } from './App' or access window.__on401.
   // TODO(WR-04): replace window.__on401 with React Context to eliminate global side-effect
-  ;(window as Record<string, unknown>)['__on401'] = () => {
+  ;(window as unknown as { __on401?: () => void }).__on401 = () => {
     clearToken()
     navigate('/login', { replace: true })
     toast.error('Sessione scaduta. Accedi di nuovo.')

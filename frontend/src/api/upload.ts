@@ -14,7 +14,7 @@ export interface SuggestedConfig {
 
 export function useUpload() {
   const { token } = useAuth()
-  const on401 = () => (window as Record<string, unknown>)['__on401']?.()
+  const on401 = () => (window as unknown as { __on401?: () => void }).__on401?.()
 
   return useMutation({
     mutationFn: async (file: File) => {
@@ -39,7 +39,7 @@ export function useUpload() {
 
 export function useConfirmUpload() {
   const { token } = useAuth()
-  const on401 = () => (window as Record<string, unknown>)['__on401']?.()
+  const on401 = () => (window as unknown as { __on401?: () => void }).__on401?.()
   const fetchJson = createApiClient(token, on401 as () => void)
 
   return useMutation({

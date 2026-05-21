@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext'
 
 export function useCollections() {
   const { token } = useAuth()
-  const on401 = () => (window as Record<string, unknown>)['__on401']?.()
+  const on401 = () => (window as unknown as { __on401?: () => void }).__on401?.()
   const fetchJson = createApiClient(token, on401 as () => void)
 
   return useQuery({

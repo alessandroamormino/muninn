@@ -22,7 +22,7 @@ export interface LogRun {
 
 export function useLogs(collection: string | null, limit = 50) {
   const { token } = useAuth()
-  const on401 = () => (window as Record<string, unknown>)['__on401']?.()
+  const on401 = () => (window as unknown as { __on401?: () => void }).__on401?.()
   const fetchJson = createApiClient(token, on401 as () => void)
 
   const qs = new URLSearchParams()
