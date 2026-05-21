@@ -199,7 +199,9 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
         </div>
       )}
 
-      <div className="relative flex-1">
+      {/* min-h-0 prevents flex-1 from overflowing; absolute inset-0 on the
+          vis-network container ensures vis-network reads a bounded clientHeight */}
+      <div className="relative flex-1 min-h-0">
 
       {/* Cluster legend — top-left */}
       <ClusterLegend
@@ -208,10 +210,11 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
         activeClusterId={activeClusterFilter}
       />
 
-      {/* Graph container — vis-network manages cursor and rendering internally */}
+      {/* Graph container — absolute inset-0 gives vis-network a stable bounded
+          clientWidth/clientHeight regardless of flex parent chain */}
       <div
         ref={containerRef}
-        className="block w-full h-full bg-card"
+        className="absolute inset-0 bg-card"
         role="img"
         aria-label={`Knowledge graph with ${data.nodes.length} nodes and ${data.edges.length} edges`}
       />

@@ -18,7 +18,7 @@ export interface UseVisNetworkReturn {
 // ─── Options ──────────────────────────────────────────────────────────────────
 
 const VIS_OPTIONS: Options = {
-  autoResize: true,
+  autoResize: false,
   height: '100%',
   width: '100%',
   nodes: {
