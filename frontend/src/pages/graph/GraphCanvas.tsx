@@ -3,6 +3,7 @@ import type { GraphResponse, GraphNode } from '@/api/graph'
 import { useVisNetwork } from './useVisNetwork'
 import NodeSidebar from './NodeSidebar'
 import ClusterLegend from './ClusterLegend'
+import { Input } from '@/components/ui/input'
 
 function computeClusterNames(
   nodes: Array<{ cluster: number; props: Record<string, unknown> }>
@@ -42,11 +43,11 @@ function computeClusterNames(
 
 interface Props {
   data: GraphResponse
-  searchTerm?: string
   resetZoomRef?: React.MutableRefObject<(() => void) | null>
 }
 
-export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
+export default function GraphCanvas({ data, resetZoomRef }: Props) {
+  const [searchTerm, setSearchTerm] = useState('')
   const containerRef = useRef<HTMLDivElement>(null)
   const [selected, setSelected] = useState<GraphNode | null>(null)
   const [activeClusterFilter, setActiveClusterFilter] = useState<number | null>(null)
@@ -171,8 +172,15 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
     <div className="h-full w-full flex flex-col">
 
       {/* Filter bar — above the graph */}
-      {filterFields.length > 0 && (
-        <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-card flex-shrink-0 overflow-x-auto">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-card flex-shrink-0 overflow-x-auto">
+        <Input
+          placeholder="Search records..."
+          value={searchTerm}
+          onChange={e => setSearchTerm(e.target.value)}
+          className="h-6 text-xs w-40 flex-shrink-0"
+        />
+        {filterFields.length > 0 && (
+          <>
           <span className="text-xs text-muted-foreground flex-shrink-0">Filters:</span>
           {filterFields.map(({ field, values }) => (
             <select
@@ -196,8 +204,9 @@ export default function GraphCanvas({ data, searchTerm, resetZoomRef }: Props) {
               ✕ clear
             </button>
           )}
-        </div>
-      )}
+          </>
+        )}
+      </div>
 
       {/* min-h-0 prevents flex-1 from overflowing; absolute inset-0 on the
           vis-network container ensures vis-network reads a bounded clientHeight */}

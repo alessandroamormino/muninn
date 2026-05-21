@@ -2,13 +2,11 @@ import { useState, useRef } from 'react'
 import EntityDropdown from '@/components/EntityDropdown'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
 import GraphCanvas from './graph/GraphCanvas'
 import { useGraph } from '@/api/graph'
 
 export default function GraphPage() {
   const [collection, setCollection] = useState<string | null>(null)
-  const [searchTerm, setSearchTerm] = useState('')
   const graph = useGraph(collection)
   const resetZoomRef = useRef<(() => void) | null>(null)
 
@@ -28,12 +26,6 @@ export default function GraphPage() {
     <div className="h-[calc(100vh-9rem)] flex flex-col gap-3">
       <div className="flex items-center gap-3">
         <h1 className="text-xl font-semibold">Knowledge Graph</h1>
-        <Input
-          placeholder="Search records..."
-          value={searchTerm}
-          onChange={e => setSearchTerm(e.target.value)}
-          className="w-52"
-        />
         <div className="flex-1" />
         {graph.data && (
           <>
@@ -86,7 +78,7 @@ export default function GraphPage() {
         )}
 
         {graph.data && !graph.isFetching && !errMsg && (
-          <GraphCanvas data={graph.data} searchTerm={searchTerm} resetZoomRef={resetZoomRef} />
+          <GraphCanvas data={graph.data} resetZoomRef={resetZoomRef} />
         )}
       </div>
     </div>
