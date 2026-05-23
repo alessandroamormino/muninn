@@ -128,21 +128,20 @@ export default function GraphCanvas({ data, resetZoomRef }: Props) {
 
   const clusterNames = useMemo(() => computeClusterNames(data.nodes), [data.nodes])
 
-  // Extract filterable fields: string values, not UUIDs, 2–30 unique values
+  // Filterable fields come from config (graph.filter_fields) — no auto-detection
   const filterFields = useMemo(() => {
-    const fieldValues = new Map<string, Set<string>>()
-    data.nodes.forEach(n => {
-      Object.entries(n.props).forEach(([key, val]) => {
-        if (typeof val !== 'string' || val.length > 60 || /^[0-9a-f-]{36}$/i.test(val)) return
-        if (!fieldValues.has(key)) fieldValues.set(key, new Set())
-        fieldValues.get(key)!.add(val)
+    if (!data.filter_fields?.length) return []
+    return data.filter_fields
+      .map(field => {
+        const values = new Set<string>()
+        data.nodes.forEach(n => {
+          const val = n.props[field]
+          if (typeof val === 'string' && val.length <= 60) values.add(val)
+        })
+        return { field, values: [...values].sort() }
       })
-    })
-    return [...fieldValues.entries()]
-      .filter(([, vals]) => vals.size >= 2 && vals.size <= 30)
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([field, vals]) => ({ field, values: [...vals].sort() }))
-  }, [data.nodes])
+      .filter(({ values }) => values.length >= 2)
+  }, [data.filter_fields, data.nodes])
 
   const selectedNeighbors = useMemo(() => {
     if (!selected) return []

@@ -86,13 +86,15 @@ INSTRUCTIONS:
 1. Classify every column into exactly one category.
 2. Choose ONE column as id_field (it can also appear in metadata_fields).
 3. output_fields should be a useful subset of text_fields union metadata_fields (5-8 fields).
-4. Return ONLY a JSON object with this exact schema - no prose, no explanation outside the JSON:
+4. graph_filter_fields: choose 1-5 categorical metadata columns with low cardinality (enums, status, type, category) that would be useful as graph filters. Exclude IDs, emails, free-text, and high-cardinality fields.
+5. Return ONLY a JSON object with this exact schema - no prose, no explanation outside the JSON:
 
 {{
   "id_field": "<column_name>",
   "text_fields": ["<col>", ...],
   "metadata_fields": ["<col>", ...],
   "output_fields": ["<col>", ...],
+  "graph_filter_fields": ["<col>", ...],
   "reasoning": {{
     "<col>": "<one-line classification reason>",
     ...
@@ -105,7 +107,7 @@ Respond with valid JSON only."""
 def _validate_suggested_fields(suggested: dict, headers: list[str]) -> None:
     """Raise ValueError if any suggested field name is not in the CSV headers (D-10 / success criterion 4)."""
     header_set = set(headers)
-    for key in ("text_fields", "metadata_fields", "output_fields"):
+    for key in ("text_fields", "metadata_fields", "output_fields", "graph_filter_fields"):
         for field in suggested.get(key, []):
             if field not in header_set:
                 raise ValueError(
@@ -185,6 +187,7 @@ def suggest_config(body: SuggestConfigRequest, _: UserRecord = Depends(require_a
         "text_fields": llm_result.get("text_fields", []),
         "metadata_fields": llm_result.get("metadata_fields", []),
         "output_fields": llm_result.get("output_fields", []),
+        "graph_filter_fields": llm_result.get("graph_filter_fields", []),
     }
 
     response: dict = {

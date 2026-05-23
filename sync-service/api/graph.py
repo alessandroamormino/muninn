@@ -28,7 +28,7 @@ from sklearn.cluster import HDBSCAN
 from auth.dependencies import get_current_user
 from auth.user_store import UserRecord
 
-from config.settings import _CONFIG_PATH, settings
+from config.settings import _CONFIG_PATH, AppConfig, load_config, settings
 from llm.ollama_llm import LLMError, OllamaLLMClient
 from weaviate_store.client import get_client
 
@@ -41,6 +41,17 @@ _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 # Override default qwen2.5:1.5b — graph needs larger model for cluster naming (D-15).
 _GRAPH_LLM_MODEL = "qwen2.5:3b"
+
+
+def _load_collection_config(collection: str) -> AppConfig:
+    """Load config.yaml for a specific collection, falling back to global settings."""
+    path = _CONFIG_ROOT / collection / "config.yaml"
+    if path.exists():
+        try:
+            return load_config(path)
+        except Exception:  # noqa: BLE001
+            pass
+    return settings
 
 
 def _validate_collection_name(name: str) -> None:
@@ -89,6 +100,8 @@ async def get_graph(
     """
     # Step 1: path-traversal guard BEFORE any I/O (T-11-01)
     _validate_collection_name(collection)
+
+    col_settings = _load_collection_config(collection)
 
     try:
         client = get_client()
@@ -228,7 +241,12 @@ async def get_graph(
                     pass  # keep fallback name "Cluster {cid}"
             clusters.append({"id": cid, "name": name, "size": size})
 
-        return {"nodes": nodes, "edges": edges, "clusters": clusters}
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "clusters": clusters,
+            "filter_fields": col_settings.graph.filter_fields,
+        }
 
     except HTTPException:
         raise

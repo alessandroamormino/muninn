@@ -101,12 +101,17 @@ class ApiConfig(BaseModel):
     max_limit: int = 100
 
 
+class GraphConfig(BaseModel):
+    filter_fields: list[str] = Field(default_factory=list)
+
+
 class AppConfig(BaseModel):
     source: SourceConfig = Field(default_factory=SourceConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     weaviate: WeaviateConfig = Field(default_factory=WeaviateConfig)
     sync: SyncConfig = Field(default_factory=SyncConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
+    graph: GraphConfig = Field(default_factory=GraphConfig)
 
     # Weaviate URL comes from environment, not config.yaml
     weaviate_url: str = Field(

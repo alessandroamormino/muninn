@@ -23,6 +23,7 @@ export interface GraphResponse {
   nodes: GraphNode[]
   edges: GraphEdge[]
   clusters: GraphCluster[]
+  filter_fields: string[]
 }
 
 export function useGraph(collection: string | null) {
