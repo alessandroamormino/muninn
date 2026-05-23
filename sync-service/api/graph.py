@@ -241,11 +241,19 @@ async def get_graph(
                     pass  # keep fallback name "Cluster {cid}"
             clusters.append({"id": cid, "name": name, "size": size})
 
+        # Weaviate lowercases the first letter of every property name.
+        # Normalize filter_fields to match actual node prop keys so the
+        # frontend lookup (n.props[field]) resolves correctly.
+        filter_fields = [
+            f[0].lower() + f[1:] if f else f
+            for f in col_settings.graph.filter_fields
+        ]
+
         return {
             "nodes": nodes,
             "edges": edges,
             "clusters": clusters,
-            "filter_fields": col_settings.graph.filter_fields,
+            "filter_fields": filter_fields,
         }
 
     except HTTPException:

@@ -191,7 +191,7 @@ export default function GraphCanvas({ data, resetZoomRef }: Props) {
               }}
               className="text-xs h-6 rounded border bg-background px-1 pr-5 cursor-pointer flex-shrink-0"
             >
-              <option value="">{field}</option>
+              <option value="">{field[0].toUpperCase() + field.slice(1)}</option>
               {values.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
           ))}
