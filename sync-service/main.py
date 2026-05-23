@@ -30,9 +30,11 @@ from api.upload import router as upload_router
 from api.graph import router as graph_router
 from api.auth import router as auth_router, _limiter as auth_limiter
 from api.admin import router as admin_router
+from api.history import router as history_router
 from auth.user_store import UserStore, RefreshTokenStore
 from scheduler import build_scheduler
 from sync.log_store import LogStore
+from sync.history_store import HistoryStore
 from config.settings import settings
 from embeddings import build_embedding_adapter
 from sync.engine import SyncEngine
@@ -87,8 +89,11 @@ async def lifespan(app: FastAPI):
         logger.info("APScheduler disabled (schedule='manual'). No automatic sync.")
     log_store = LogStore(Path("/app/.sync/sync_logs.db"))
     app.state.log_store = log_store
-    app.state.upload_status = None  # updated by POST /upload and POST /upload/confirm — D-08
     logger.info("LogStore ready at /app/.sync/sync_logs.db")
+    history_store = HistoryStore(Path("/app/.sync/search_history.db"))
+    app.state.history_store = history_store
+    logger.info("HistoryStore ready at /app/.sync/search_history.db")
+    app.state.upload_status = None  # updated by POST /upload and POST /upload/confirm — D-08
     # Auth stores (D-03, D-05)
     user_store = UserStore(Path("/app/.sync/users.db"))
     token_store = RefreshTokenStore(user_store._conn)
@@ -112,6 +117,8 @@ async def lifespan(app: FastAPI):
         logger.info("APScheduler stopped.")
     app.state.log_store.close()
     logger.info("LogStore closed.")
+    app.state.history_store.close()
+    logger.info("HistoryStore closed.")
     app.state.user_store.close()
     logger.info("UserStore closed.")
     close_client()
@@ -138,6 +145,7 @@ app.include_router(upload_router)
 app.include_router(graph_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(history_router)
 
 
 @app.get("/health")
