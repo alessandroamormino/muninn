@@ -13,8 +13,7 @@ export default function Sidebar() {
   const { data, isLoading, isError } = useCollections()
   return (
     <aside className="w-60 border-r bg-card flex flex-col">
-      <div className="p-4 text-base font-semibold">smart-search</div>
-      <Separator />
+      <div className="h-14 border-b flex items-center px-4 text-base font-semibold">smart-search</div>
       <nav className="flex flex-col p-2 gap-1">
         {NAV.map((n) => (
           <NavLink
