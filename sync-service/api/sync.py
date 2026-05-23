@@ -14,7 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from auth.dependencies import get_current_user, require_admin
 from auth.user_store import UserRecord
-from config.settings import load_config
+from config.settings import load_config, settings
 from sync.engine import SyncEngine
 from weaviate_store import get_client
 
