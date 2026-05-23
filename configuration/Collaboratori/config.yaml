@@ -1,0 +1,43 @@
+graph:
+  filter_fields:
+  - Azienda
+  - Sede
+  - Descrizione
+api:
+  default_limit: 10
+  max_limit: 100
+  output_fields:
+  - Descrizione
+  - Stato
+  - Azienda
+  - Job_Title
+  - Responsabile
+embedding:
+  endpoint: http://host.docker.internal:11434
+  model: qwen3-embedding:4b
+  type: ollama
+source:
+  delimiter: ';'
+  file_path: ./data/collaboratori.csv
+  id_field: Collaboratore
+  type: csv
+sync:
+  hash_fields:
+  - Collaboratore
+  mode: full
+  schedule: manual
+weaviate:
+  collection: Collaboratori
+  metadata_fields:
+  - Mail
+  - Cellulare_Aziendale
+  - Fisso_Ufficio
+  - Compensation
+  text_fields:
+  - Descrizione
+  - Stato
+  - Stato
+  - Azienda
+  - Job_Title
+  - Responsabile
+  - Prodotto_Principale
