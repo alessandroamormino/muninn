@@ -30,9 +30,12 @@ from api.upload import router as upload_router
 from api.graph import router as graph_router
 from api.auth import router as auth_router, _limiter as auth_limiter
 from api.admin import router as admin_router
+from api.history import router as history_router
 from auth.user_store import UserStore, RefreshTokenStore
 from scheduler import build_scheduler
 from sync.log_store import LogStore
+from sync.history_store import HistoryStore
+from sync.cache_store import CacheStore
 from config.settings import settings
 from embeddings import build_embedding_adapter
 from sync.engine import SyncEngine
@@ -72,7 +75,16 @@ async def lifespan(app: FastAPI):
     logger.info("Checking embedding-model version against persisted state...")
     check_and_handle_model_change(get_client(), settings, state_store=state_store)
     app.state.embedding_adapter = build_embedding_adapter(settings.embedding)
-    app.state.sync_engine = SyncEngine(settings, get_client(), state_store)
+    history_store = HistoryStore(Path("/app/.sync/search_history.db"))
+    app.state.history_store = history_store
+    logger.info("HistoryStore ready at /app/.sync/search_history.db")
+    cache_store = CacheStore(
+        Path("/app/.sync/search_history.db"),
+        ttl_seconds=settings.api.cache_ttl_seconds,
+    )
+    app.state.cache_store = cache_store
+    logger.info("CacheStore ready at /app/.sync/search_history.db (ttl=%ds)", settings.api.cache_ttl_seconds)
+    app.state.sync_engine = SyncEngine(settings, get_client(), state_store, cache_store=cache_store)
     app.state.sync_lock = threading.Lock()
     app.state.sync_status = {"status": "idle", "last_run": None}
     scheduler = build_scheduler(app.state, settings)
@@ -112,6 +124,10 @@ async def lifespan(app: FastAPI):
         logger.info("APScheduler stopped.")
     app.state.log_store.close()
     logger.info("LogStore closed.")
+    app.state.history_store.close()
+    logger.info("HistoryStore closed.")
+    app.state.cache_store.close()
+    logger.info("CacheStore closed.")
     app.state.user_store.close()
     logger.info("UserStore closed.")
     close_client()
@@ -138,6 +154,7 @@ app.include_router(upload_router)
 app.include_router(graph_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(history_router)
 
 
 @app.get("/health")

@@ -49,6 +49,13 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
             "status": "completed",
             "last_run": {**result},
         }
+        # --- Cache invalidation (SC-13-06) -----------------------------------------
+        _cache_store = getattr(app_state, "cache_store", None)
+        if _cache_store is not None:
+            try:
+                _cache_store.invalidate_collection(fresh_settings.weaviate.collection)
+            except Exception as _inv_exc:  # noqa: BLE001
+                logger.warning("Cache invalidation failed after sync: %s", _inv_exc)
         took_ms = int((time.perf_counter() - _t0) * 1000)
         if _log_store is not None:
             _finished_at = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()

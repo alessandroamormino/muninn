@@ -1,4 +1,4 @@
-"""Search API router — GET /search.
+"""Search API router — GET /search, GET /search/suggestions.
 
 Uses Weaviate hybrid search (BM25 + vector) so that both keyword queries
 (names, codes, exact strings) and semantic queries (concepts, natural language)
@@ -13,13 +13,16 @@ Per CONTEXT.md decisions:
 - D-03: allowed fields = text_fields ∪ metadata_fields (not output_fields)
 - D-04: default fields when ?fields absent = api.output_fields
 - D-05: limit must be 1..max_limit; default = default_limit
+- D-08/D-09: exact-match cache keyed by SHA256(q|collection|filters|min_score)
+- D-15: GET /search/suggestions for prefix-matched autocomplete from user history
 """
 from __future__ import annotations
 
 import logging
 import re
 import time
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -28,6 +31,7 @@ import weaviate.classes.query as _wvc_query
 from auth.dependencies import get_current_user
 from auth.user_store import UserRecord
 from config.settings import _CONFIG_PATH, load_config, settings
+from sync.cache_store import make_cache_key
 from weaviate_store.client import get_client
 
 _CONFIG_ROOT = _CONFIG_PATH.parent  # configuration/ dir (container) or project_root/configuration/ (host)
@@ -64,7 +68,7 @@ async def search(
     ),
     _user: UserRecord = Depends(get_current_user),
 ) -> dict:
-    """Ricerca ibrida (BM25 + semantica). Ritorna {query, results:[{...props, _score}, ...]}."""
+    """Ricerca ibrida (BM25 + semantica). Ritorna {query, results:[{...props, _score}, ...], cached}."""
     # --- Per-entity config resolution ----------------------------------------
     # If ?collection= is provided, validate name then load the per-entity config.
     # Otherwise fall back to the global settings singleton (no regression).
@@ -81,6 +85,37 @@ async def search(
         cfg = load_config(config_path)
     else:
         cfg = settings
+
+    # --- Effective collection name (used for cache keying and history logging) --
+    effective_collection = collection if collection is not None else cfg.weaviate.collection
+
+    # --- Cache + history references (resolved once, used on both hit and miss paths) ---
+    cache_store = getattr(request.app.state, "cache_store", None)
+    history_store = getattr(request.app.state, "history_store", None)
+    _cache_key = make_cache_key(q, effective_collection, filter, min_score)
+
+    if cache_store is not None:
+        try:
+            cached = cache_store.get(_cache_key)
+            if cached is not None:
+                cached["cached"] = True
+                # --- History log on cache-HIT path (SC-13-01) ----------------------
+                if history_store is not None:
+                    try:
+                        history_store.log(
+                            user_id=_user.username,
+                            query=q,
+                            collection=effective_collection,
+                            filters=filter or "",
+                            min_score=min_score,
+                            result_count=len(cached.get("results", [])),
+                            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                        )
+                    except Exception as _hist_exc:  # noqa: BLE001
+                        logger.warning("history log error (cache hit): %s", _hist_exc)
+                return cached
+        except Exception as _cache_exc:  # noqa: BLE001
+            logger.warning("cache lookup error: %s", _cache_exc)
 
     # --- Limit validation --------------------------------------------------
     effective_limit = limit if limit is not None else cfg.api.default_limit
@@ -181,4 +216,50 @@ async def search(
         if min_score is None or obj.metadata.score >= min_score
     ]
     took_ms = int((time.perf_counter() - _t0) * 1000)
-    return {"query": q, "took_ms": took_ms, "results": hits}
+    response_body = {"query": q, "took_ms": took_ms, "results": hits, "cached": False}
+
+    # --- Cache store (SC-13-05) ------------------------------------------------
+    if cache_store is not None:
+        try:
+            ttl = getattr(cfg.api, "cache_ttl_seconds", 300)
+            cache_store.set(_cache_key, effective_collection, response_body, ttl_seconds=ttl)
+        except Exception as _cs_exc:  # noqa: BLE001
+            logger.warning("cache store error: %s", _cs_exc)
+
+    # --- History log on cache-MISS path (SC-13-01) -----------------------------
+    if history_store is not None:
+        try:
+            history_store.log(
+                user_id=_user.username,
+                query=q,
+                collection=effective_collection,
+                filters=filter or "",
+                min_score=min_score,
+                result_count=len(hits),
+                timestamp=datetime.now(tz=timezone.utc).isoformat(),
+            )
+        except Exception as _hist_exc:  # noqa: BLE001
+            logger.warning("history log error (cache miss): %s", _hist_exc)
+
+    return response_body
+
+
+@router.get("/search/suggestions")
+async def search_suggestions(
+    request: Request,
+    q: Annotated[str, Query(min_length=1)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 10,
+    _user: UserRecord = Depends(get_current_user),
+) -> list[str]:
+    """Return autocomplete suggestions from the user's own history (D-15, SC-13-04).
+
+    Prefix-matches the user's own past queries — never exposes other users' queries.
+    """
+    history_store = getattr(request.app.state, "history_store", None)
+    if history_store is None:
+        return []
+    try:
+        return history_store.get_suggestions(_user.username, q, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("suggestions error: %s", exc)
+        return []

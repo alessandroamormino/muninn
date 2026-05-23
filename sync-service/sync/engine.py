@@ -38,10 +38,17 @@ def _default_write_model_version(model: str) -> None:
 class SyncEngine:
     """Orchestrates the fetch -> hash -> diff -> upsert pipeline."""
 
-    def __init__(self, app_cfg: AppConfig, client: Any, state_store: StateStore) -> None:
+    def __init__(
+        self,
+        app_cfg: AppConfig,
+        client: Any,
+        state_store: StateStore,
+        cache_store: Any | None = None,
+    ) -> None:
         self._cfg = app_cfg
         self._client = client
         self._state = state_store
+        self._cache_store = cache_store  # reserved for future direct invalidation
         self._source_adapter = build_source_adapter(
             app_cfg.source, app_cfg.sync, app_cfg.weaviate
         )
