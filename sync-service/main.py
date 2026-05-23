@@ -35,6 +35,7 @@ from auth.user_store import UserStore, RefreshTokenStore
 from scheduler import build_scheduler
 from sync.log_store import LogStore
 from sync.history_store import HistoryStore
+from sync.cache_store import CacheStore
 from config.settings import settings
 from embeddings import build_embedding_adapter
 from sync.engine import SyncEngine
@@ -74,7 +75,16 @@ async def lifespan(app: FastAPI):
     logger.info("Checking embedding-model version against persisted state...")
     check_and_handle_model_change(get_client(), settings, state_store=state_store)
     app.state.embedding_adapter = build_embedding_adapter(settings.embedding)
-    app.state.sync_engine = SyncEngine(settings, get_client(), state_store)
+    history_store = HistoryStore(Path("/app/.sync/search_history.db"))
+    app.state.history_store = history_store
+    logger.info("HistoryStore ready at /app/.sync/search_history.db")
+    cache_store = CacheStore(
+        Path("/app/.sync/search_history.db"),
+        ttl_seconds=settings.api.cache_ttl_seconds,
+    )
+    app.state.cache_store = cache_store
+    logger.info("CacheStore ready at /app/.sync/search_history.db (ttl=%ds)", settings.api.cache_ttl_seconds)
+    app.state.sync_engine = SyncEngine(settings, get_client(), state_store, cache_store=cache_store)
     app.state.sync_lock = threading.Lock()
     app.state.sync_status = {"status": "idle", "last_run": None}
     scheduler = build_scheduler(app.state, settings)
@@ -90,9 +100,6 @@ async def lifespan(app: FastAPI):
     log_store = LogStore(Path("/app/.sync/sync_logs.db"))
     app.state.log_store = log_store
     logger.info("LogStore ready at /app/.sync/sync_logs.db")
-    history_store = HistoryStore(Path("/app/.sync/search_history.db"))
-    app.state.history_store = history_store
-    logger.info("HistoryStore ready at /app/.sync/search_history.db")
     app.state.upload_status = None  # updated by POST /upload and POST /upload/confirm — D-08
     # Auth stores (D-03, D-05)
     user_store = UserStore(Path("/app/.sync/users.db"))
@@ -119,6 +126,8 @@ async def lifespan(app: FastAPI):
     logger.info("LogStore closed.")
     app.state.history_store.close()
     logger.info("HistoryStore closed.")
+    app.state.cache_store.close()
+    logger.info("CacheStore closed.")
     app.state.user_store.close()
     logger.info("UserStore closed.")
     close_client()
