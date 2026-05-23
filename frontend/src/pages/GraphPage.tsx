@@ -23,7 +23,7 @@ export default function GraphPage() {
   })()
 
   return (
-    <div className="h-[calc(100vh-9rem)] flex flex-col gap-3">
+    <div className="h-[calc(100vh-5.5rem)] flex flex-col gap-3">
       <div className="flex items-center gap-3">
         <h1 className="text-xl font-semibold">Knowledge Graph</h1>
         <div className="flex-1" />

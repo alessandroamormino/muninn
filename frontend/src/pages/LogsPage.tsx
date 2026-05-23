@@ -10,7 +10,7 @@ export default function LogsPage() {
   const logs = useLogs(collection)
 
   return (
-    <div className="max-w-6xl mx-auto space-y-4">
+    <div className="space-y-4">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-xl font-semibold">Logs</h1>
         <div className="flex items-center gap-2">

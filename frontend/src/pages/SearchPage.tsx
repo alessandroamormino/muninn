@@ -32,7 +32,7 @@ export default function SearchPage() {
   })()
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
+    <div className="space-y-4">
       <h1 className="text-xl font-semibold">Search</h1>
       <EntityDropdown value={collection} onChange={setCollection} />
       <SearchBar
