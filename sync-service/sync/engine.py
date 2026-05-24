@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from config.settings import AppConfig
 from embeddings import build_embedding_adapter
@@ -64,9 +64,12 @@ class SyncEngine:
     # Public API
     # ------------------------------------------------------------------
 
-    def run_incremental(self) -> dict:
+    def run_incremental(self, on_progress: Callable[[str, int, int], None] | None = None) -> dict:
         """Fetch all records, compare hashes, upsert only changed/new records."""
         logger.info("Avvio sync incrementale (source.type=%r)", self._cfg.source.type)
+
+        if on_progress:
+            on_progress("fetching", 0, 0)
         records = self._source_adapter.fetch_records()
         logger.info("Sorgente ha restituito %d record", len(records))
 
@@ -84,9 +87,12 @@ class SyncEngine:
 
         logger.info("Delta: %d record da upsertare, %d invariati", len(delta), skipped)
 
+        _total = len(delta)
         result = upsert_records(
             self._client, delta, self._cfg.weaviate, self._cfg.source.type, self._embedding_adapter,
             id_field=self._cfg.source.id_field,
+            on_embedded=lambda done, total: on_progress("embedding", done, total) if on_progress else None,
+            on_upserted=lambda done, total: on_progress("upserting", done, total) if on_progress else None,
         )
         if result.skipped == 0:
             self._persist_state(delta, result)
@@ -99,7 +105,7 @@ class SyncEngine:
 
         return self._build_stats(result, skipped=skipped)
 
-    def run_full(self) -> dict:
+    def run_full(self, on_progress: Callable[[str, int, int], None] | None = None) -> dict:
         """Drop + recreate collection + upsert all records from scratch."""
         logger.info(
             "Avvio full re-index (source.type=%r, collection=%r)",
@@ -118,11 +124,15 @@ class SyncEngine:
         self._state.clear()
 
         # Fetch + upsert completo
+        if on_progress:
+            on_progress("fetching", 0, 0)
         records = self._source_adapter.fetch_records()
         logger.info("Sorgente ha restituito %d record per full re-index", len(records))
         result = upsert_records(
             self._client, records, self._cfg.weaviate, self._cfg.source.type, self._embedding_adapter,
             id_field=self._cfg.source.id_field,
+            on_embedded=lambda done, total: on_progress("embedding", done, total) if on_progress else None,
+            on_upserted=lambda done, total: on_progress("upserting", done, total) if on_progress else None,
         )
         if result.skipped == 0:
             self._persist_state(records, result)

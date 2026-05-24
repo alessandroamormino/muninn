@@ -15,7 +15,7 @@ import datetime as _dt
 import logging
 import uuid as _uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from config.settings import WeaviateConfig
 
@@ -26,7 +26,8 @@ _WEAVIATE_RESERVED_PROPS = {"id", "vector"}
 # Fields coerced to float (matches heuristic in schema.py _infer_metadata_datatype).
 _NUMBER_FIELDS = {"price", "cost", "amount", "qty", "quantity", "score", "weight", "value", "popularity"}
 _NUMBER_SUFFIXES = {"_average", "_count", "_rate", "_score", "_ratio", "_num", "_total", "_amount"}
-_EMBED_BATCH_SIZE = 100  # max texts per Ollama call — keeps each request well under timeout
+_EMBED_BATCH_SIZE = 500  # max texts per Ollama call — bumped from 100 for throughput
+_UPSERT_REPORT_EVERY = _EMBED_BATCH_SIZE  # report upsert progress at same cadence
 
 
 @dataclass
@@ -135,6 +136,8 @@ def upsert_records(
     source_type: str,
     embedding_adapter=None,
     id_field: str | None = None,
+    on_embedded: Callable[[int, int], None] | None = None,
+    on_upserted: Callable[[int, int], None] | None = None,
 ) -> UpsertResult:
     """Idempotently upsert each record into the collection.
 
@@ -162,11 +165,15 @@ def upsert_records(
             len(records), embedding_adapter.model_name(), _EMBED_BATCH_SIZE,
         )
         vectors = []
-        for i in range(0, len(documents), _EMBED_BATCH_SIZE):
+        total_docs = len(documents)
+        for i in range(0, total_docs, _EMBED_BATCH_SIZE):
             batch = documents[i: i + _EMBED_BATCH_SIZE]
             batch_vecs = embedding_adapter.embed(batch)
             vectors.extend(batch_vecs)
-            logger.info("  Embedded %d/%d records...", min(i + _EMBED_BATCH_SIZE, len(documents)), len(documents))
+            done = min(i + _EMBED_BATCH_SIZE, total_docs)
+            logger.info("  Embedded %d/%d records...", done, total_docs)
+            if on_embedded is not None:
+                on_embedded(done, total_docs)
         logger.info("Embeddings ready (dims=%d).", len(vectors[0]) if vectors else 0)
 
     inserted = updated = skipped = 0
@@ -193,6 +200,9 @@ def upsert_records(
             logger.error("Upsert failed for record_id=%r uuid=%s: %s",
                          record_id, obj_uuid, exc)
             skipped += 1
+
+        if on_upserted is not None and (idx + 1) % _UPSERT_REPORT_EVERY == 0:
+            on_upserted(idx + 1, len(records))
 
     result = UpsertResult(inserted=inserted, updated=updated, skipped=skipped)
     logger.info(

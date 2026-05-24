@@ -40,11 +40,29 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
     else:
         _log_type = "incremental"
 
+    # --- Progress tracking callback (D-sync-progress) -----------------------
+    app_state.sync_progress = {"phase": "fetching", "total": 0, "done": 0, "percent": 0.0,
+                               "elapsed_seconds": 0, "eta_seconds": None}
+
+    def _on_progress(phase: str, done: int, total: int) -> None:
+        elapsed = time.perf_counter() - _t0
+        percent = round(done / total * 100, 1) if total > 0 else 0.0
+        eta = int(elapsed / done * (total - done)) if done > 0 else None
+        app_state.sync_progress = {
+            "phase": phase,
+            "total": total,
+            "done": done,
+            "percent": percent,
+            "elapsed_seconds": int(elapsed),
+            "eta_seconds": eta,
+        }
+    # -------------------------------------------------------------------------
+
     try:
         if mode == "full":
-            result = engine.run_full()
+            result = engine.run_full(on_progress=_on_progress)
         else:
-            result = engine.run_incremental()
+            result = engine.run_incremental(on_progress=_on_progress)
         app_state.sync_status = {
             "status": "completed",
             "last_run": {**result},
@@ -107,6 +125,7 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
         # Recompute took_ms for sync_status dict (backward compat)
         _took_ms_final = int((time.perf_counter() - _t0) * 1000)
         app_state.sync_status["last_run"]["took_ms"] = _took_ms_final
+        app_state.sync_progress = None  # clear progress when done
         app_state.sync_lock.release()
 
 
@@ -140,5 +159,19 @@ async def trigger_full_sync(request: Request, background_tasks: BackgroundTasks,
 
 @router.get("/sync/status")
 async def sync_status(request: Request, _: UserRecord = Depends(get_current_user)) -> dict:
-    """Restituisce lo stato corrente e le statistiche dell'ultimo sync."""
-    return request.app.state.sync_status
+    """Restituisce lo stato corrente e le statistiche dell'ultimo sync.
+
+    Quando status='running', include un blocco 'progress' con:
+      phase        — 'fetching' | 'embedding' | 'upserting'
+      total        — record totali da processare
+      done         — record già processati nella fase corrente
+      percent      — percentuale completamento (0.0–100.0)
+      elapsed_seconds — secondi trascorsi dall'inizio del sync
+      eta_seconds  — stima secondi rimanenti (null se non ancora calcolabile)
+    """
+    status = dict(request.app.state.sync_status)
+    if status.get("status") == "running":
+        progress = getattr(request.app.state, "sync_progress", None)
+        if progress is not None:
+            status["progress"] = progress
+    return status

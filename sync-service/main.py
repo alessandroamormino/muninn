@@ -87,6 +87,7 @@ async def lifespan(app: FastAPI):
     app.state.sync_engine = SyncEngine(settings, get_client(), state_store, cache_store=cache_store)
     app.state.sync_lock = threading.Lock()
     app.state.sync_status = {"status": "idle", "last_run": None}
+    app.state.sync_progress = None  # populated during active sync, cleared on completion
     scheduler = build_scheduler(app.state, settings)
     app.state.scheduler = scheduler
     if scheduler is not None:
