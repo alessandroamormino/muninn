@@ -170,6 +170,25 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "")
     _t0 = time.perf_counter()
     _started_at = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
     _log_store = getattr(app_state, "log_store", None)
+
+    # --- Progress tracking (mirrors _run_sync_bg in api/sync.py) ------------
+    app_state.sync_progress = {"phase": "fetching", "total": 0, "done": 0, "percent": 0.0,
+                               "elapsed_seconds": 0, "eta_seconds": None}
+
+    def _on_progress(phase: str, done: int, total: int) -> None:
+        elapsed = time.perf_counter() - _t0
+        percent = round(done / total * 100, 1) if total > 0 else 0.0
+        eta = int(elapsed / done * (total - done)) if done > 0 else None
+        app_state.sync_progress = {
+            "phase": phase,
+            "total": total,
+            "done": done,
+            "percent": percent,
+            "elapsed_seconds": int(elapsed),
+            "eta_seconds": eta,
+        }
+    # -------------------------------------------------------------------------
+
     try:
         temp_cfg = load_config(config_path)                        # D-04
         collection_lower = temp_cfg.weaviate.collection.lower()
@@ -180,7 +199,7 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "")
         if app_state.upload_status:
             app_state.upload_status["status"] = "syncing"
 
-        result = engine.run_full()                                 # always full — D-06
+        result = engine.run_full(on_progress=_on_progress)        # always full — D-06
 
         app_state.sync_status = {"status": "completed", "last_run": {**result}}
         if app_state.upload_status:
@@ -238,6 +257,7 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "")
                 reason=None,
             )
     finally:
+        app_state.sync_progress = None  # clear progress when done
         app_state.sync_lock.release()   # mirrors sync.py line 96
 
 
