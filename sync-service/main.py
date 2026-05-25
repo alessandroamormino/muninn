@@ -35,7 +35,7 @@ from auth.user_store import UserStore, RefreshTokenStore
 from scheduler import build_scheduler
 from sync.log_store import LogStore
 from sync.history_store import HistoryStore
-from sync.cache_store import CacheStore
+from sync.cache_adapters import build_cache_adapter
 from config.settings import settings
 from embeddings import build_embedding_adapter
 from sync.engine import SyncEngine
@@ -78,12 +78,9 @@ async def lifespan(app: FastAPI):
     history_store = HistoryStore(Path("/app/.sync/search_history.db"))
     app.state.history_store = history_store
     logger.info("HistoryStore ready at /app/.sync/search_history.db")
-    cache_store = CacheStore(
-        Path("/app/.sync/search_history.db"),
-        ttl_seconds=settings.api.cache_ttl_seconds,
-    )
+    cache_store = build_cache_adapter(settings)
     app.state.cache_store = cache_store
-    logger.info("CacheStore ready at /app/.sync/search_history.db (ttl=%ds)", settings.api.cache_ttl_seconds)
+    logger.info("CacheAdapter ready (mode=%r, ttl=%ds)", settings.api.cache_mode, settings.api.cache_ttl_seconds)
     app.state.sync_engine = SyncEngine(settings, get_client(), state_store, cache_store=cache_store)
     app.state.sync_lock = threading.Lock()
     app.state.sync_status = {"status": "idle", "last_run": None}

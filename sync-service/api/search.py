@@ -32,7 +32,6 @@ from auth.dependencies import get_current_user
 from auth.user_store import UserRecord
 from config.settings import _CONFIG_PATH, load_config, settings
 from embeddings import build_embedding_adapter
-from sync.cache_store import make_cache_key
 from weaviate_store.client import get_client
 
 _CONFIG_ROOT = _CONFIG_PATH.parent  # configuration/ dir (container) or project_root/configuration/ (host)
@@ -93,11 +92,10 @@ async def search(
     # --- Cache + history references (resolved once, used on both hit and miss paths) ---
     cache_store = getattr(request.app.state, "cache_store", None)
     history_store = getattr(request.app.state, "history_store", None)
-    _cache_key = make_cache_key(q, effective_collection, filter, min_score)
 
     if cache_store is not None:
         try:
-            cached = cache_store.get(_cache_key)
+            cached = cache_store.get(q, effective_collection, filter, min_score)
             if cached is not None:
                 cached["cached"] = True
                 # --- History log on cache-HIT path (SC-13-01) ----------------------
@@ -228,7 +226,7 @@ async def search(
     if cache_store is not None:
         try:
             ttl = getattr(cfg.api, "cache_ttl_seconds", 300)
-            cache_store.set(_cache_key, effective_collection, response_body, ttl_seconds=ttl)
+            cache_store.set(q, effective_collection, filter, min_score, response_body, ttl_seconds=ttl)
         except Exception as _cs_exc:  # noqa: BLE001
             logger.warning("cache store error: %s", _cs_exc)
 
