@@ -79,8 +79,38 @@ def _build_properties(weaviate_cfg: WeaviateConfig) -> list:
     return properties
 
 
+def _build_quantizer_config(weaviate_cfg: WeaviateConfig, dims: int | None = None):
+    """Return the quantizer config for the HNSW index, or None if quantization is disabled.
+
+    pq  = Product Quantization  — ~32× RAM reduction, ~2-5% quality loss.
+          segments = dims // 8  (Weaviate recommendation: 8 dims per segment).
+          training_limit = 100_000 (default; Weaviate trains the codebook on the first N objects).
+    bq  = Binary Quantization   — ~128× RAM reduction, ~10-15% quality loss.
+    none = no compression.
+    """
+    q = getattr(weaviate_cfg, "quantization", "none")
+    if q == "pq":
+        # segments must divide evenly into dims; fall back to 128 if dims unknown.
+        effective_dims = dims or 1024
+        segments = max(1, effective_dims // 8)
+        logger.info("PQ quantization: segments=%d (dims=%d), training_limit=100000", segments, effective_dims)
+        return _wvc.Configure.VectorIndex.hnsw(
+            quantizer=_wvc.Configure.VectorIndex.Quantizer.pq(
+                segments=segments,
+                training_limit=100_000,
+            )
+        )
+    if q == "bq":
+        logger.info("BQ quantization enabled.")
+        return _wvc.Configure.VectorIndex.hnsw(
+            quantizer=_wvc.Configure.VectorIndex.Quantizer.bq()
+        )
+    return None  # no quantization — Weaviate default HNSW
+
+
 def create_collection_if_missing(
-    client, weaviate_cfg: WeaviateConfig, embedding_type: str = "weaviate_builtin"
+    client, weaviate_cfg: WeaviateConfig, embedding_type: str = "weaviate_builtin",
+    embedding_dims: int | None = None,
 ) -> bool:
     """Create the Weaviate collection if it does not already exist.
 
@@ -89,6 +119,11 @@ def create_collection_if_missing(
 
     When embedding_type is "ollama" (or any non-builtin adapter), Weaviate is
     configured with no vectorizer — vectors are passed explicitly on each insert.
+
+    When weaviate_cfg.quantization is "pq" or "bq", the HNSW index is created
+    with the corresponding quantizer to reduce RAM usage significantly.
+    NOTE: quantization cannot be added to an existing collection — it must be set
+    at creation time. A full re-index is required to apply it retroactively.
     """
     name = weaviate_cfg.collection
     if client.collections.exists(name):
@@ -102,14 +137,23 @@ def create_collection_if_missing(
     else:
         vectorizer_config = _wvc.Configure.Vectorizer.none()
 
+    vector_index_config = _build_quantizer_config(weaviate_cfg, dims=embedding_dims)
+
+    q_label = getattr(weaviate_cfg, "quantization", "none")
     logger.info(
-        "Creating Weaviate collection %r with %d properties (vectorizer=%s, "
+        "Creating Weaviate collection %r with %d properties (vectorizer=%s, quantization=%s, "
         "text_fields=%s, metadata_fields=%s).",
-        name, len(properties), embedding_type, weaviate_cfg.text_fields, weaviate_cfg.metadata_fields,
+        name, len(properties), embedding_type, q_label,
+        weaviate_cfg.text_fields, weaviate_cfg.metadata_fields,
     )
-    client.collections.create(
+
+    create_kwargs: dict = dict(
         name=name,
         vectorizer_config=vectorizer_config,
         properties=properties,
     )
+    if vector_index_config is not None:
+        create_kwargs["vector_index_config"] = vector_index_config
+
+    client.collections.create(**create_kwargs)
     return True

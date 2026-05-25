@@ -55,8 +55,9 @@ class SyncEngine:
         )
         self._embedding_adapter = build_embedding_adapter(app_cfg.embedding)
         # Iniettabile nei test tramite override: engine._create_collection_fn = mock_fn
+        _dims = self._embedding_adapter.dimensions() if self._embedding_adapter is not None else None
         self._create_collection_fn = lambda c, w: create_collection_if_missing(
-            c, w, embedding_type=app_cfg.embedding.type
+            c, w, embedding_type=app_cfg.embedding.type, embedding_dims=_dims
         )
         # Iniettabile nei test tramite override: engine._write_model_version_fn = mock_fn
         self._write_model_version_fn = _default_write_model_version

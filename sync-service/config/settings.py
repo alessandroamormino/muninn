@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -87,6 +87,11 @@ class WeaviateConfig(BaseModel):
     collection: str = "Products"
     text_fields: list[str] = Field(default_factory=list)
     metadata_fields: list[str] = Field(default_factory=list)
+    # Quantization: "none" | "pq" | "bq"
+    # pq  = Product Quantization  — ~32× RAM reduction, ~2-5% quality loss  (consigliato per >100K record)
+    # bq  = Binary Quantization   — ~128× RAM reduction, ~10-15% quality loss (solo se RAM è critica)
+    # none = nessuna compressione  (default — compatibile con collection esistenti)
+    quantization: Literal["none", "pq", "bq"] = "none"
 
 
 class SyncConfig(BaseModel):
