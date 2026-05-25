@@ -50,6 +50,16 @@ class StateStore:
         self._save(new_data)
         self._data = new_data
 
+    def bulk_set(self, entries: dict[str, dict]) -> None:
+        """Aggiorna molte entry in una singola scrittura su disco.
+
+        Usare al posto di set() in loop su grandi dataset (es. _persist_state
+        dopo un full sync) — evita di riscrivere l'intero file N volte.
+        """
+        new_data = {**self._data, **entries}
+        self._save(new_data)
+        self._data = new_data
+
     def all(self) -> dict[str, dict]:
         """Restituisce una copia del dizionario interno completo."""
         return dict(self._data)

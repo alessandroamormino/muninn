@@ -181,18 +181,25 @@ class SyncEngine:
     # ------------------------------------------------------------------
 
     def _persist_state(self, records: list[dict], result: Any) -> None:
-        """Aggiorna StateStore per tutti i record upsertati con successo."""
-        _compute_uuid = compute_record_uuid  # usa la funzione module-level (patchabile nei test)
+        """Aggiorna StateStore per tutti i record upsertati con successo.
+
+        Usa bulk_set per costruire il dict in memoria e scrivere su disco
+        una sola volta — evita O(n²) scritture su dataset grandi.
+        """
         now_iso = datetime.now(tz=timezone.utc).isoformat()
+        entries: dict[str, dict] = {}
         for record in records:
             record_id = self._source_adapter.get_record_id(record)
             current_hash = self._source_adapter.get_record_hash(record)
-            weaviate_uuid = str(_compute_uuid(self._cfg.source.type, record_id))
-            self._state.set(record_id, {
+            weaviate_uuid = str(compute_record_uuid(self._cfg.source.type, record_id))
+            entries[record_id] = {
                 "hash": current_hash,
                 "synced_at": now_iso,
                 "weaviate_uuid": weaviate_uuid,
-            })
+            }
+        logger.info("Persisting state per %d record (single write)...", len(entries))
+        self._state.bulk_set(entries)
+        logger.info("State persistito.")
 
     def _build_stats(self, result: Any, skipped: int = 0) -> dict:
         return {
