@@ -31,6 +31,7 @@ import weaviate.classes.query as _wvc_query
 from auth.dependencies import get_current_user
 from auth.user_store import UserRecord
 from config.settings import _CONFIG_PATH, load_config, settings
+from embeddings import build_embedding_adapter
 from sync.cache_store import make_cache_key
 from weaviate_store.client import get_client
 
@@ -178,7 +179,12 @@ async def search(
     # alpha=0.5 balances keyword and semantic equally. Keyword component (BM25)
     # handles names, codes, exact strings; semantic component handles concepts
     # and natural language. Both work from the same search bar with no user config.
-    embedding_adapter = getattr(request.app.state, "embedding_adapter", None)
+    # Per-entity collections may use a different embedding model than the global config.
+    # Build the adapter from the resolved cfg so query dims match the indexed vectors.
+    if collection is not None:
+        embedding_adapter = build_embedding_adapter(cfg.embedding)
+    else:
+        embedding_adapter = getattr(request.app.state, "embedding_adapter", None)
     _t0 = time.perf_counter()
     try:
         weaviate_col = get_client().collections.get(cfg.weaviate.collection)
