@@ -6,6 +6,7 @@ WORKDIR /app
 # Install dependencies first (separate layer for Docker cache efficiency)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m spacy download it_core_news_sm
 
 # Copy application source
 COPY . .

@@ -31,3 +31,6 @@ passlib[bcrypt]>=1.7.4,<2.0.0
 bcrypt>=3.0.0,<4.0.0
 pyotp>=2.9.0,<3.0.0
 slowapi>=0.1.9,<1.0.0
+
+# NLP — cache normalizzata (Phase 13.1)
+spacy>=3.7,<4.0
