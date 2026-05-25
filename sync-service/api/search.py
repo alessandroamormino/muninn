@@ -15,6 +15,14 @@ Per CONTEXT.md decisions:
 - D-05: limit must be 1..max_limit; default = default_limit
 - D-08/D-09: exact-match cache keyed by SHA256(q|collection|filters|min_score)
 - D-15: GET /search/suggestions for prefix-matched autocomplete from user history
+
+Negation-aware search:
+- Detects Italian negation tokens (non, no, nessuno, senza, …) in the query
+- Strips negation from the query used for embedding (better semantic vector)
+- Post-filters results: excludes any record where a metadata field value
+  contains the entity following the negation token (case-insensitive substring)
+- Fetches 3× limit from Weaviate to compensate for post-filter exclusions
+- Exposes negation_query and negation_entities in the response for transparency
 """
 from __future__ import annotations
 
@@ -39,8 +47,110 @@ _CONFIG_ROOT = _CONFIG_PATH.parent  # configuration/ dir (container) or project_
 # Path-traversal guard: same pattern as api/graph.py _COLLECTION_RE (T-11-01).
 _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
+# Italian negation tokens — same set used by NormalizedCacheAdapter and SemanticCacheAdapter.
+_NEGATION_TOKENS = frozenset({
+    "non", "no", "nessun", "nessuno", "nessuna", "senza", "mai",
+    "né", "nemmeno", "neanche", "niente", "nulla",
+})
+
+# Italian prepositions/articles to skip when extracting the negated entity.
+_IT_STOPWORDS = frozenset({
+    "in", "di", "a", "da", "su", "con", "per", "tra", "fra",
+    "il", "la", "lo", "i", "gli", "le", "un", "una", "uno",
+    "del", "della", "dello", "dei", "degli", "delle",
+    "al", "alla", "allo", "ai", "agli", "alle",
+    "dal", "dalla", "dallo", "dai", "dagli", "dalle",
+    "nel", "nella", "nello", "nei", "negli", "nelle",
+    "sul", "sulla", "sullo", "sui", "sugli", "sulle",
+    "che", "chi", "come", "dove", "quando", "quale", "quali",
+    "è", "e", "o", "ma", "se", "anche", "solo",
+})
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _parse_negation(q: str) -> tuple[str, list[str]]:
+    """Detect negation tokens and extract entity candidates that follow them.
+
+    Strategy:
+    - Tokenize on whitespace, strip trailing punctuation per token.
+    - When a negation token is found, look ahead for the entity being negated.
+      Entity extraction priority:
+        1. First meaningful word AFTER a preposition/locative ("in", "di", "a", …)
+           e.g. "non lavora in apping" → entity = "apping"
+        2. Fallback: last meaningful word in the next 3 tokens
+           e.g. "senza java" → entity = "java"
+    - The negation token itself is removed from the clean query (better embedding).
+    - Entities are NOT removed from clean_q — the semantic vector needs them.
+
+    Returns:
+        clean_q: query with negation tokens stripped (used for vector embedding).
+        neg_entities: lowercase entity strings to exclude via post-filter.
+
+    Examples:
+        "chi non lavora in apping"   → ("chi lavora in apping",   ["apping"])
+        "chi NON ha lavorato in apping?" → ("chi ha lavorato in apping?", ["apping"])
+        "sviluppatori senza java"    → ("sviluppatori java",       ["java"])
+        "chi lavora in apping"       → ("chi lavora in apping",   [])  # no negation
+    """
+    # Italian prepositions that typically precede the negated entity
+    _LOCATIVE_PREPS = frozenset({"in", "di", "a", "da", "su", "per", "con", "tra", "fra"})
+
+    tokens = q.split()
+    clean_tokens: list[str] = []
+    neg_entities: list[str] = []
+
+    i = 0
+    while i < len(tokens):
+        tok_clean = tokens[i].lower().rstrip("?!,.:;")
+        if tok_clean in _NEGATION_TOKENS:
+            # Look ahead up to 5 tokens: try to find "preposition + entity" first.
+            window = tokens[i + 1: i + 6]
+            found_after_prep: str | None = None
+            fallback_last: str | None = None
+            prev_was_prep = False
+            for wt in window:
+                wt_clean = wt.lower().rstrip("?!,.:;")
+                if wt_clean in _NEGATION_TOKENS:
+                    break  # second negation token — stop here
+                if wt_clean in _LOCATIVE_PREPS:
+                    prev_was_prep = True
+                    continue
+                if wt_clean not in _IT_STOPWORDS:
+                    if prev_was_prep and found_after_prep is None:
+                        found_after_prep = wt_clean  # highest priority
+                    fallback_last = wt_clean
+                prev_was_prep = False
+
+            entity = found_after_prep or fallback_last
+            if entity:
+                neg_entities.append(entity)
+
+            # Skip only the negation token; remaining tokens stay in clean_tokens.
+            i += 1
+            continue
+
+        clean_tokens.append(tokens[i])
+        i += 1
+
+    clean_q = " ".join(clean_tokens).strip() or q  # never return empty string
+    return clean_q, neg_entities
+
+
+def _apply_negation_filter(props: dict, neg_entities: list[str]) -> bool:
+    """Return True if the record should be EXCLUDED (matches a negated entity).
+
+    Checks every property value in props for a case-insensitive substring match
+    against any negated entity. A single match is enough to exclude the record.
+    """
+    for val in props.values():
+        if val is None:
+            continue
+        val_lower = str(val).lower()
+        if any(entity in val_lower for entity in neg_entities):
+            return True
+    return False
 
 
 @router.get("/search")
@@ -173,6 +283,23 @@ async def search(
             for f in parsed_filters[1:]:
                 weaviate_filter = weaviate_filter & f  # D-08: AND logic
 
+    # --- Negation detection ---------------------------------------------------
+    # Detect Italian negation tokens in the query. When found:
+    # - embed_q = query without negation tokens (better semantic vector)
+    # - neg_entities = candidate strings to exclude via post-filter
+    # - fetch_limit = 3× effective_limit to compensate for post-filter exclusions
+    neg_entities: list[str] = []
+    embed_q = q
+    fetch_limit = effective_limit
+    if any(t.lower().rstrip("?!,.:;") in _NEGATION_TOKENS for t in q.split()):
+        embed_q, neg_entities = _parse_negation(q)
+        if neg_entities:
+            fetch_limit = min(effective_limit * 3, cfg.api.max_limit)
+            logger.info(
+                "Negation detected: embed_q=%r, entities=%r, fetch_limit=%d",
+                embed_q, neg_entities, fetch_limit,
+            )
+
     # --- Weaviate hybrid query (BM25 + vector) --------------------------------
     # alpha=0.5 balances keyword and semantic equally. Keyword component (BM25)
     # handles names, codes, exact strings; semantic component handles concepts
@@ -187,13 +314,15 @@ async def search(
     try:
         weaviate_col = get_client().collections.get(cfg.weaviate.collection)
         if embedding_adapter is not None:
-            # Client-side embedding: compute vector and pass to hybrid()
-            query_vectors = embedding_adapter.embed([q])
+            # Client-side embedding: embed the clean query (negation stripped) for
+            # a better semantic vector. The original q is still passed as BM25 text
+            # so keyword matches still work.
+            query_vectors = embedding_adapter.embed([embed_q])
             results = weaviate_col.query.hybrid(
-                query=q,
+                query=embed_q,
                 vector=query_vectors[0],
                 alpha=0.5,
-                limit=effective_limit,
+                limit=fetch_limit,
                 return_properties=return_props,
                 return_metadata=_wvc_query.MetadataQuery(score=True),
                 filters=weaviate_filter,
@@ -201,9 +330,9 @@ async def search(
         else:
             # Server-side vectorization: hybrid() lets Weaviate vectorize internally
             results = weaviate_col.query.hybrid(
-                query=q,
+                query=embed_q,
                 alpha=0.5,
-                limit=effective_limit,
+                limit=fetch_limit,
                 return_properties=return_props,
                 return_metadata=_wvc_query.MetadataQuery(score=True),
                 filters=weaviate_filter,
@@ -214,13 +343,22 @@ async def search(
         logger.error("search failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=503, detail="Search backend unavailable")
 
-    hits = [
-        {**obj.properties, "_score": obj.metadata.score}
-        for obj in results.objects
-        if min_score is None or obj.metadata.score >= min_score
-    ]
+    # --- Post-filter: apply negation exclusions and min_score -----------------
+    hits = []
+    for obj in results.objects:
+        if min_score is not None and obj.metadata.score < min_score:
+            continue
+        if neg_entities and _apply_negation_filter(obj.properties, neg_entities):
+            continue
+        hits.append({**obj.properties, "_score": obj.metadata.score})
+        if len(hits) >= effective_limit:
+            break
+
     took_ms = int((time.perf_counter() - _t0) * 1000)
-    response_body = {"query": q, "took_ms": took_ms, "results": hits, "cached": False}
+    response_body: dict = {"query": q, "took_ms": took_ms, "results": hits, "cached": False}
+    if neg_entities:
+        response_body["negation_query"] = embed_q
+        response_body["negation_entities"] = neg_entities
 
     # --- Cache store (SC-13-05) ------------------------------------------------
     if cache_store is not None:
