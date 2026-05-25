@@ -196,6 +196,10 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "")
         # Per-entity StateStore: avoids wiping global sync_state.json (A3)
         temp_state = StateStore(Path("/app/.sync") / f"state_{collection_lower}.json")
         engine = SyncEngine(temp_cfg, get_client(), temp_state)   # D-03/D-04
+        # Per-entity syncs must NOT overwrite the global model_version.json.
+        # Each collection may use a different embedding model; the global file
+        # tracks only the model for the default collection checked at startup.
+        engine._write_model_version_fn = lambda model: None  # no-op
 
         if app_state.upload_status:
             app_state.upload_status["status"] = "syncing"
