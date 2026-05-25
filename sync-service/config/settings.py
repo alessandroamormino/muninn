@@ -105,6 +105,8 @@ class ApiConfig(BaseModel):
     default_limit: int = 10
     max_limit: int = 100
     cache_ttl_seconds: int = 300  # TTL default: 5 minuti (D-10)
+    cache_mode: Literal["exact", "normalized", "semantic"] = "exact"  # D-06: default exact
+    semantic_cache_threshold: float = 0.90  # solo per semantic mode (D-20)
 
 
 class GraphConfig(BaseModel):
