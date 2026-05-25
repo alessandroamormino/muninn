@@ -55,6 +55,7 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
             "percent": percent,
             "elapsed_seconds": int(elapsed),
             "eta_seconds": eta,
+            "resumable": True,
         }
     # -------------------------------------------------------------------------
 

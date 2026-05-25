@@ -186,6 +186,7 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "")
             "percent": percent,
             "elapsed_seconds": int(elapsed),
             "eta_seconds": eta,
+            "resumable": True,
         }
     # -------------------------------------------------------------------------
 

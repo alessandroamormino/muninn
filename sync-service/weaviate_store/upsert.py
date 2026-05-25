@@ -136,77 +136,91 @@ def upsert_records(
     source_type: str,
     embedding_adapter=None,
     id_field: str | None = None,
-    on_embedded: Callable[[int, int], None] | None = None,
-    on_upserted: Callable[[int, int], None] | None = None,
+    start_from_batch: int = 0,
+    on_batch_done: Callable[[int, int, int], None] | None = None,
 ) -> UpsertResult:
     """Idempotently upsert each record into the collection.
 
-    For each record:
-      1. Compute UUID = uuid5(NAMESPACE_DNS, source_type + ":" + record_id)
-      2. Filter properties to (text_fields ∪ metadata_fields)
-      3. If embedding_adapter provided: compute vector and pass it explicitly
-      4. If UUID exists in collection: replace; else: insert
+    Processes records in batches of _EMBED_BATCH_SIZE. For each batch:
+      1. Embed the batch (if embedding_adapter provided)
+      2. Upsert each record in the batch to Weaviate
+      3. Call on_batch_done(batch_num, done_records, total_records)
+
+    start_from_batch: skip batches 0..N-1 (already processed in a previous run).
+    on_batch_done: called after each batch completes embed+upsert — use for
+                   checkpoint writes and progress reporting.
+
+    RAM usage: O(batch_size * dims) instead of O(total * dims) — ~2 MB per batch
+    instead of ~4 GB for 1M records at 1024 dims.
     """
     if not records:
         logger.info("upsert_records called with empty list; nothing to do.")
         return UpsertResult(0, 0, 0)
 
-    collection = client.collections.get(weaviate_cfg.collection)
+    collection_obj = client.collections.get(weaviate_cfg.collection)
     if id_field is None:
         id_field = _get_id_field(weaviate_cfg)
     allowed = set(weaviate_cfg.text_fields) | set(weaviate_cfg.metadata_fields)
 
-    # Pre-compute all vectors in batches to avoid Ollama request timeouts.
-    vectors: list[list[float]] | None = None
-    if embedding_adapter is not None:
-        documents = [_build_document(r, weaviate_cfg.text_fields) for r in records]
-        logger.info(
-            "Computing embeddings for %d records via %s (batch_size=%d)...",
-            len(records), embedding_adapter.model_name(), _EMBED_BATCH_SIZE,
-        )
-        vectors = []
-        total_docs = len(documents)
-        for i in range(0, total_docs, _EMBED_BATCH_SIZE):
-            batch = documents[i: i + _EMBED_BATCH_SIZE]
-            batch_vecs = embedding_adapter.embed(batch)
-            vectors.extend(batch_vecs)
-            done = min(i + _EMBED_BATCH_SIZE, total_docs)
-            logger.info("  Embedded %d/%d records...", done, total_docs)
-            if on_embedded is not None:
-                on_embedded(done, total_docs)
-        logger.info("Embeddings ready (dims=%d).", len(vectors[0]) if vectors else 0)
-
+    total = len(records)
+    total_batches = (total + _EMBED_BATCH_SIZE - 1) // _EMBED_BATCH_SIZE
     inserted = updated = skipped = 0
-    for idx, record in enumerate(records):
-        raw_id = record.get(id_field)
-        if raw_id is None or raw_id == "":
-            logger.warning("Record missing id field %r; skipping. record_keys=%s",
-                           id_field, list(record.keys()))
-            skipped += 1
-            continue
-        record_id = str(raw_id)
-        obj_uuid = compute_record_uuid(source_type, record_id)
-        properties = _filter_properties(record, allowed)
-        vector = vectors[idx] if vectors is not None else None
 
-        try:
-            if collection.data.exists(uuid=obj_uuid):
-                collection.data.replace(uuid=obj_uuid, properties=properties, vector=vector)
-                updated += 1
-            else:
-                collection.data.insert(properties=properties, uuid=obj_uuid, vector=vector)
-                inserted += 1
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Upsert failed for record_id=%r uuid=%s: %s",
-                         record_id, obj_uuid, exc)
-            skipped += 1
+    if start_from_batch > 0:
+        logger.info(
+            "Riprendendo da batch %d/%d (%d record già processati).",
+            start_from_batch, total_batches, start_from_batch * _EMBED_BATCH_SIZE,
+        )
 
-        if on_upserted is not None and (idx + 1) % _UPSERT_REPORT_EVERY == 0:
-            on_upserted(idx + 1, len(records))
+    for batch_num in range(total_batches):
+        i = batch_num * _EMBED_BATCH_SIZE
+        batch_records = records[i: i + _EMBED_BATCH_SIZE]
+
+        if batch_num < start_from_batch:
+            continue  # already embedded+upserted in a previous run
+
+        # --- Embed batch -------------------------------------------------------
+        batch_vecs: list[list[float] | None]
+        if embedding_adapter is not None:
+            batch_docs = [_build_document(r, weaviate_cfg.text_fields) for r in batch_records]
+            batch_vecs = embedding_adapter.embed(batch_docs)
+        else:
+            batch_vecs = [None] * len(batch_records)
+
+        # --- Upsert batch ------------------------------------------------------
+        for j, record in enumerate(batch_records):
+            raw_id = record.get(id_field)
+            if raw_id is None or raw_id == "":
+                logger.warning("Record missing id field %r; skipping.", id_field)
+                skipped += 1
+                continue
+            record_id = str(raw_id)
+            obj_uuid = compute_record_uuid(source_type, record_id)
+            properties = _filter_properties(record, allowed)
+            vector = batch_vecs[j]
+
+            try:
+                if collection_obj.data.exists(uuid=obj_uuid):
+                    collection_obj.data.replace(uuid=obj_uuid, properties=properties, vector=vector)
+                    updated += 1
+                else:
+                    collection_obj.data.insert(properties=properties, uuid=obj_uuid, vector=vector)
+                    inserted += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Upsert failed for record_id=%r uuid=%s: %s", record_id, obj_uuid, exc)
+                skipped += 1
+
+        done = min(i + _EMBED_BATCH_SIZE, total)
+        logger.info(
+            "Batch %d/%d completato — record: %d/%d (ins=%d upd=%d skip=%d)",
+            batch_num + 1, total_batches, done, total, inserted, updated, skipped,
+        )
+        if on_batch_done is not None:
+            on_batch_done(batch_num, done, total)
 
     result = UpsertResult(inserted=inserted, updated=updated, skipped=skipped)
     logger.info(
-        "upsert_records done: inserted=%d updated=%d skipped=%d total=%d",
+        "upsert_records done: inserted=%d updated=%d skipped=%d total_processed=%d",
         result.inserted, result.updated, result.skipped, result.total,
     )
     return result
