@@ -19,8 +19,7 @@ logger = logging.getLogger(__name__)
 def build_cache_adapter(settings) -> BaseCacheAdapter:
     """Factory: restituisce il cache adapter corretto per settings.api.cache_mode.
 
-    Supporta: "exact" (default), "normalized".
-    "semantic" è gestito nel piano successivo (Phase 13.1 Wave 3).
+    Supporta: "exact" (default), "normalized", "semantic".
     Fallback a ExactMatchCacheAdapter + logger.warning per modalità non supportate.
     """
     mode = getattr(settings.api, "cache_mode", "exact")
@@ -34,8 +33,18 @@ def build_cache_adapter(settings) -> BaseCacheAdapter:
         from sync.cache_adapters.normalized import NormalizedCacheAdapter  # lazy — D-11
         return NormalizedCacheAdapter(path, ttl_seconds=ttl)
 
-    # semantic gestito nel piano 13.1-03
-    logger.warning("cache_mode %r non ancora supportato — fallback a exact", mode)
+    if mode == "semantic":
+        from sync.cache_adapters.semantic import SemanticCacheAdapter  # lazy — D-15
+        threshold = getattr(settings.api, "semantic_cache_threshold", 0.90)
+        # Passa l'embedding config per costruire OllamaEmbeddingAdapter lazy
+        return SemanticCacheAdapter(
+            path=path,
+            ttl_seconds=ttl,
+            threshold=threshold,
+            embedding_cfg=settings.embedding,
+        )
+
+    logger.warning("cache_mode %r non supportato -- fallback a exact", mode)
     return ExactMatchCacheAdapter(path, ttl_seconds=ttl)
 
 
