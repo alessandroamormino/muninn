@@ -15,5 +15,6 @@ for _mod in (
     "weaviate.classes.query",
     "weaviate.classes.tenants",
     "weaviate.classes.data",
+    "weaviate.exceptions",
 ):
     sys.modules.setdefault(_mod, MagicMock())
