@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import logging
 import os
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,6 +26,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _DATA_ROOT = Path("/app/data")
+
+# --- Prompt injection hardening (D-01..D-04, Phase 13.2) ---
+_SUSPECT_RE = re.compile(r'ignore|system:|###|</?\w+>', re.I)
+MAX_CELL = 200
+
+
+def _sanitize_cell(v: str) -> str:
+    """Sanitize a single cell value before LLM insertion (D-01..D-04, Phase 13.2).
+
+    1. Stringify and strip leading/trailing whitespace
+    2. Normalize whitespace: newlines/tabs -> single space
+    3. Hard-truncate to MAX_CELL characters
+    4. SUSPECT pattern match -> replace entirely with '[REDACTED]'
+
+    Header names are NOT passed through this function — only cell VALUES.
+    """
+    v = str(v).strip()
+    v = re.sub(r'[\n\t]+', ' ', v)
+    v = v[:MAX_CELL]
+    if _SUSPECT_RE.search(v):
+        return '[REDACTED]'
+    return v
 
 
 class SuggestConfigRequest(BaseModel):
@@ -65,7 +88,7 @@ def _build_prompt(headers: list[str], rows: list[dict]) -> str:
     # Serialize sample as mini-CSV table
     sample_lines = [",".join(headers)]
     for row in rows:
-        sample_lines.append(",".join(str(row.get(h, "")) for h in headers))
+        sample_lines.append(",".join(_sanitize_cell(row.get(h, "")) for h in headers))
     sample_table = "\n".join(sample_lines)
 
     return f"""You are a data analyst helping configure a semantic search system.
