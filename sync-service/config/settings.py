@@ -57,6 +57,19 @@ class PaginationConfig(BaseModel):
     max_pages: int = 10000
 
 
+class HnswConfig(BaseModel):
+    """HNSW vector index tuning (Phase 13.2). All fields optional -- None = Weaviate server default (64).
+
+    NOTE on mutability after collection creation:
+      - ef is MUTABLE post-creation via:
+          collection.config.update(vector_index_config=Reconfigure.VectorIndex.hnsw(ef=N))
+      - max_connections is IMMUTABLE -- changing it requires a full re-index.
+    """
+    model_config = ConfigDict(extra="ignore")
+    ef: int | None = None
+    max_connections: int | None = None
+
+
 class SourceConfig(BaseModel):
     type: Literal["csv", "json", "mysql", "postgresql", "mongodb", "rest_api"] = "csv"
     file_path: str | None = None
@@ -87,11 +100,15 @@ class WeaviateConfig(BaseModel):
     collection: str = "Products"
     text_fields: list[str] = Field(default_factory=list)
     metadata_fields: list[str] = Field(default_factory=list)
-    # Quantization: "none" | "pq" | "bq"
-    # pq  = Product Quantization  — ~32× RAM reduction, ~2-5% quality loss  (consigliato per >100K record)
-    # bq  = Binary Quantization   — ~128× RAM reduction, ~10-15% quality loss (solo se RAM è critica)
-    # none = nessuna compressione  (default — compatibile con collection esistenti)
-    quantization: Literal["none", "pq", "bq"] = "none"
+    # Quantization: "none" | "pq" | "bq" | "sq"  (Phase 13.2 added "sq")
+    # pq  = Product Quantization  -- ~32x RAM reduction, ~2-5% quality loss   (>100K records)
+    # bq  = Binary Quantization   -- ~128x RAM reduction, ~10-15% quality loss (RAM critical)
+    # sq  = Scalar Quantization   -- ~4x RAM reduction, ~1-2% quality loss    (10K-100K records)
+    # none = no compression (default -- compatible with existing collections)
+    quantization: Literal["none", "pq", "bq", "sq"] = "none"
+    # HNSW tuning -- optional. All None = use Weaviate server defaults (ef=64, max_connections=64).
+    # ef is mutable post-creation; max_connections requires full re-index to change.
+    hnsw: HnswConfig = Field(default_factory=HnswConfig)
 
 
 class SyncConfig(BaseModel):
