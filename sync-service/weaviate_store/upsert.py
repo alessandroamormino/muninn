@@ -172,6 +172,32 @@ def upsert_records(
             start_from_batch, total_batches, start_from_batch * _EMBED_BATCH_SIZE,
         )
 
+    # --- Embedding pre-step with deduplication (D-08..D-12, Phase 13.2) ----------
+    # Build all docs once, dedup preserving order, then embed only unique_docs.
+    # Duplicate records share the same vector object — zero copy, zero re-embed.
+    all_docs = [_build_document(r, weaviate_cfg.text_fields) for r in records]
+    unique_docs = list(dict.fromkeys(all_docs))  # Py 3.7+ guarantees insertion order
+    if len(unique_docs) < len(all_docs):
+        logger.info(
+            "Embedding dedup: %d docs → %d unique (%.0f%% reduction)",
+            len(all_docs), len(unique_docs),
+            (1 - len(unique_docs) / len(all_docs)) * 100,
+        )
+
+    all_vecs: list[list[float] | None]
+    if embedding_adapter is not None:
+        all_unique_vecs: list[list[float]] = []
+        n_unique = len(unique_docs)
+        n_embed_batches = (n_unique + _EMBED_BATCH_SIZE - 1) // _EMBED_BATCH_SIZE
+        for ub in range(n_embed_batches):
+            ub_docs = unique_docs[ub * _EMBED_BATCH_SIZE: (ub + 1) * _EMBED_BATCH_SIZE]
+            all_unique_vecs.extend(embedding_adapter.embed(ub_docs))
+        vec_map: dict[str, list[float]] = dict(zip(unique_docs, all_unique_vecs))
+        all_vecs = [vec_map[doc] for doc in all_docs]
+    else:
+        all_vecs = [None] * len(records)
+    # ---------------------------------------------------------------------------
+
     for batch_num in range(total_batches):
         i = batch_num * _EMBED_BATCH_SIZE
         batch_records = records[i: i + _EMBED_BATCH_SIZE]
@@ -179,13 +205,8 @@ def upsert_records(
         if batch_num < start_from_batch:
             continue  # already embedded+upserted in a previous run
 
-        # --- Embed batch -------------------------------------------------------
-        batch_vecs: list[list[float] | None]
-        if embedding_adapter is not None:
-            batch_docs = [_build_document(r, weaviate_cfg.text_fields) for r in batch_records]
-            batch_vecs = embedding_adapter.embed(batch_docs)
-        else:
-            batch_vecs = [None] * len(batch_records)
+        # --- Slice pre-computed vectors for this batch (D-08..D-12) -----------
+        batch_vecs: list[list[float] | None] = all_vecs[i: i + _EMBED_BATCH_SIZE]
 
         # --- Upsert batch ------------------------------------------------------
         for j, record in enumerate(batch_records):
