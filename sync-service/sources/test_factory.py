@@ -1,7 +1,9 @@
 """Test per build_source_adapter factory — TDD RED phase."""
+from unittest.mock import MagicMock, patch
+
 import pytest
 
-from config.settings import SourceConfig, SyncConfig, WeaviateConfig
+from config.settings import MySQLConfig, MySQLQueryConfig, SourceConfig, SyncConfig, WeaviateConfig
 
 
 def _make_cfgs(source_type: str, file_path: str | None = None, **kwargs):
@@ -42,15 +44,13 @@ class TestBuildSourceAdapterDispatch:
         adapter = build_source_adapter(src, syn, wea)
         assert isinstance(adapter, JSONAdapter)
 
-    def test_mysql_raises_not_implemented(self):
+    def test_mysql_raises_not_implemented_without_mysql_block(self):
+        """build_source_adapter with type=mysql but no mysql: block raises ValueError."""
         from sources import build_source_adapter
-        # SourceConfig.type Literal doesn't include 'mysql' but we test the function dispatch
-        # We create a fake cfg-like object to avoid Pydantic validation error
-        class FakeSrc:
-            type = "mysql"
-        with pytest.raises(NotImplementedError) as exc_info:
-            build_source_adapter(FakeSrc(), SyncConfig(), WeaviateConfig())
-        assert "mysql" in str(exc_info.value)
+        src = SourceConfig(type="mysql")  # no mysql: block
+        with pytest.raises(ValueError) as exc_info:
+            build_source_adapter(src, SyncConfig(), WeaviateConfig())
+        assert "mysql" in str(exc_info.value).lower()
 
     def test_postgresql_raises_not_implemented(self):
         from sources import build_source_adapter
@@ -67,3 +67,30 @@ class TestBuildSourceAdapterDispatch:
         with pytest.raises(NotImplementedError) as exc_info:
             build_source_adapter(FakeSrc(), SyncConfig(), WeaviateConfig())
         assert "unknown_db" in str(exc_info.value)
+
+    def test_mysql_returns_mysql_adapter(self):
+        """build_source_adapter with type=mysql and a valid mysql: block returns MySQLAdapter."""
+        from sources import build_source_adapter, MySQLAdapter
+
+        q = MySQLQueryConfig.model_validate({
+            "from": "dipendenti",
+            "fields": ["id", "nome"],
+            "id_field": "id",
+            "hash_fields": ["id", "nome"],
+        })
+        mysql_cfg = MySQLConfig(
+            host="localhost",
+            database="mydb",
+            user="user",
+            password="pass",
+            query=q,
+        )
+        src = SourceConfig(type="mysql", mysql=mysql_cfg)
+        syn = SyncConfig()
+        wea = WeaviateConfig()
+
+        mock_engine = MagicMock()
+        with patch("sources.mysql_adapter.create_engine", return_value=mock_engine):
+            adapter = build_source_adapter(src, syn, wea)
+
+        assert isinstance(adapter, MySQLAdapter)

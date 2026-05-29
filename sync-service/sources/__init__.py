@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from sources.csv_adapter import CSVAdapter
 from sources.json_adapter import JSONAdapter
+from sources.mysql_adapter import MySQLAdapter
 from sources.rest_api_adapter import RestAPIAdapter
 
 
@@ -13,8 +14,8 @@ def build_source_adapter(
 ) -> "BaseSourceAdapter":
     """Factory che restituisce il SourceAdapter corretto in base a source_cfg.type.
 
-    Supporta csv, json e rest_api. Lancia NotImplementedError per tipi non
-    ancora implementati (mysql, postgresql, mongodb).
+    Supporta csv, json, rest_api e mysql. Lancia NotImplementedError per tipi non
+    ancora implementati (postgresql, mongodb).
     """
     source_type = source_cfg.type
     if source_type == "csv":
@@ -23,11 +24,13 @@ def build_source_adapter(
         return JSONAdapter(source_cfg, sync_cfg, weaviate_cfg)
     if source_type == "rest_api":
         return RestAPIAdapter(source_cfg, sync_cfg, weaviate_cfg)
+    if source_type == "mysql":
+        return MySQLAdapter(source_cfg, sync_cfg, weaviate_cfg)
     raise NotImplementedError(
         f"source.type={source_type!r} non ancora supportato. "
-        "Tipi disponibili: 'csv', 'json', 'rest_api'. "
-        "Per MySQL/PostgreSQL/MongoDB vedere le implementazioni previste in CLAUDE.md."
+        "Tipi disponibili: 'csv', 'json', 'rest_api', 'mysql'. "
+        "Per PostgreSQL/MongoDB vedere le implementazioni previste in CLAUDE.md."
     )
 
 
-__all__ = ["CSVAdapter", "JSONAdapter", "RestAPIAdapter", "build_source_adapter"]
+__all__ = ["CSVAdapter", "JSONAdapter", "MySQLAdapter", "RestAPIAdapter", "build_source_adapter"]
