@@ -203,11 +203,23 @@ class SyncEngine:
         logger.info("State persistito.")
 
     def _build_stats(self, result: Any, skipped: int = 0) -> dict:
-        return {
-            "total": result.total + skipped,
+        total = result.total + skipped
+        stats: dict = {
+            "total": total,
             "inserted": result.inserted,
             "updated": result.updated,
             "skipped": skipped,
             "errors": result.skipped,  # UpsertResult.skipped = errori upsert
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         }
+        # D-21/D-22 (Phase 13.2): warn when large unquantized collection detected.
+        # Key is added ONLY when condition is met -- absent key = no warning.
+        q = getattr(self._cfg.weaviate, "quantization", "none")
+        if total > 50_000 and q == "none":
+            msg = (
+                f"Collection has {total:,} records but quantization='none'. "
+                "Consider enabling quantization (pq/bq/sq) to reduce RAM usage."
+            )
+            logger.warning("quantization_warning: %s", msg)
+            stats["quantization_warning"] = msg
+        return stats
