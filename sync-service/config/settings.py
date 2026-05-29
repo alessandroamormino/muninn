@@ -70,6 +70,42 @@ class HnswConfig(BaseModel):
     max_connections: int | None = None
 
 
+class MySQLJoinConfig(BaseModel):
+    """Declarative JOIN config for a single table join in MySQLAdapter (Phase 14, D-16)."""
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    table: str
+    on: str
+    fields: list[str] = Field(default_factory=list)
+    aggregate: bool = False
+    separator: str = ", "
+    as_: Optional[str] = Field(default=None, alias="as")
+
+
+class MySQLQueryConfig(BaseModel):
+    """Query definition for MySQLAdapter (table, fields, id_field, hash_fields, joins)."""
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    from_table: str = Field(alias="from")
+    fields: list[str] = Field(default_factory=list)
+    id_field: str = "id"
+    hash_fields: list[str] = Field(default_factory=list)
+    joins: list[MySQLJoinConfig] = Field(default_factory=list)
+    fetch_chunk_size: int = 10000
+
+
+class MySQLConfig(BaseModel):
+    """Connection + query config for MySQLAdapter (Phase 14, D-16)."""
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    host: str = "localhost"
+    port: int = 3306
+    database: str
+    user: str
+    password: str
+    ssl_ca: Optional[str] = None
+    ssl_cert: Optional[str] = None
+    ssl_key: Optional[str] = None
+    query: MySQLQueryConfig
+
+
 class SourceConfig(BaseModel):
     type: Literal["csv", "json", "mysql", "postgresql", "mongodb", "rest_api"] = "csv"
     file_path: str | None = None
@@ -85,6 +121,8 @@ class SourceConfig(BaseModel):
     pagination: PaginationConfig = Field(default_factory=PaginationConfig)
     params: dict[str, str | int | float | bool] = Field(default_factory=dict)
     method: Literal["GET", "POST"] = "GET"
+    # Phase 14 addition — optional; None for all non-MySQL adapters
+    mysql: MySQLConfig | None = None
 
 
 class EmbeddingConfig(BaseModel):
