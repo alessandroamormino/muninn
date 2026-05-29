@@ -26,7 +26,7 @@ _WEAVIATE_RESERVED_PROPS = {"id", "vector"}
 # Fields coerced to float (matches heuristic in schema.py _infer_metadata_datatype).
 _NUMBER_FIELDS = {"price", "cost", "amount", "qty", "quantity", "score", "weight", "value", "popularity"}
 _NUMBER_SUFFIXES = {"_average", "_count", "_rate", "_score", "_ratio", "_num", "_total", "_amount"}
-_EMBED_BATCH_SIZE = 500  # max texts per Ollama call — bumped from 100 for throughput
+_EMBED_BATCH_SIZE = 1000  # max texts per Ollama call — bumped from 100 for throughput
 _UPSERT_REPORT_EVERY = _EMBED_BATCH_SIZE  # report upsert progress at same cadence
 
 
