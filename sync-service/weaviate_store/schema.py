@@ -80,17 +80,37 @@ def _build_properties(weaviate_cfg: WeaviateConfig) -> list:
 
 
 def _build_quantizer_config(weaviate_cfg: WeaviateConfig, dims: int | None = None):
-    """Return the quantizer config for the HNSW index, or None if quantization is disabled.
+    """Return the HNSW index config (with optional quantizer), or None if no overrides.
 
-    pq  = Product Quantization  — ~32× RAM reduction, ~2-5% quality loss.
-          segments = dims // 8  (Weaviate recommendation: 8 dims per segment).
-          training_limit = 100_000 (default; Weaviate trains the codebook on the first N objects).
-    bq  = Binary Quantization   — ~128× RAM reduction, ~10-15% quality loss.
-    none = no compression.
+    Quantization options:
+      pq  = Product Quantization  -- ~32x RAM reduction, ~2-5% quality loss   (>100K records)
+      bq  = Binary Quantization   -- ~128x RAM reduction, ~10-15% quality loss (RAM critical)
+      sq  = Scalar Quantization   -- ~4x RAM reduction, ~1-2% quality loss    (10K-100K records, Phase 13.2)
+      none = no compression (default)
+
+    HNSW tuning (Phase 13.2):
+      - cfg.hnsw.ef             -- MUTABLE post-creation via Reconfigure.VectorIndex.hnsw(ef=N)
+      - cfg.hnsw.max_connections -- IMMUTABLE after creation; requires full re-index to change
+
+    Only non-None HNSW kwargs are passed to Configure.VectorIndex.hnsw() to avoid
+    overriding Weaviate server defaults with explicit nulls (see RESEARCH.md Pitfall 3).
+
+    NOTE: quantization cannot be added to an existing collection -- a full re-index is
+    required to apply it retroactively.
     """
     q = getattr(weaviate_cfg, "quantization", "none")
+    hnsw_cfg = getattr(weaviate_cfg, "hnsw", None)
+
+    # Build HNSW kwargs dict -- only include non-None values (Pitfall 3).
+    hnsw_kwargs: dict = {}
+    if hnsw_cfg is not None:
+        if getattr(hnsw_cfg, "ef", None) is not None:
+            hnsw_kwargs["ef"] = hnsw_cfg.ef
+        if getattr(hnsw_cfg, "max_connections", None) is not None:
+            # max_connections is IMMUTABLE after creation -- set only at create time.
+            hnsw_kwargs["max_connections"] = hnsw_cfg.max_connections
+
     if q == "pq":
-        # segments must divide evenly into dims; fall back to 128 if dims unknown.
         effective_dims = dims or 1024
         segments = max(1, effective_dims // 8)
         logger.info("PQ quantization: segments=%d (dims=%d), training_limit=100000", segments, effective_dims)
@@ -98,14 +118,28 @@ def _build_quantizer_config(weaviate_cfg: WeaviateConfig, dims: int | None = Non
             quantizer=_wvc.Configure.VectorIndex.Quantizer.pq(
                 segments=segments,
                 training_limit=100_000,
-            )
+            ),
+            **hnsw_kwargs,
         )
     if q == "bq":
         logger.info("BQ quantization enabled.")
         return _wvc.Configure.VectorIndex.hnsw(
-            quantizer=_wvc.Configure.VectorIndex.Quantizer.bq()
+            quantizer=_wvc.Configure.VectorIndex.Quantizer.bq(),
+            **hnsw_kwargs,
         )
-    return None  # no quantization — Weaviate default HNSW
+    if q == "sq":
+        # ~4x RAM reduction, ~1-2% quality loss -- recommended for 10K-100K records.
+        logger.info("SQ quantization enabled (training_limit=100000).")
+        return _wvc.Configure.VectorIndex.hnsw(
+            quantizer=_wvc.Configure.VectorIndex.Quantizer.sq(
+                training_limit=100_000,
+            ),
+            **hnsw_kwargs,
+        )
+    # quantization == "none": return hnsw config only if HNSW overrides were requested.
+    if hnsw_kwargs:
+        return _wvc.Configure.VectorIndex.hnsw(**hnsw_kwargs)
+    return None  # no quantization, no HNSW override -- Weaviate default.
 
 
 def create_collection_if_missing(
@@ -120,10 +154,12 @@ def create_collection_if_missing(
     When embedding_type is "ollama" (or any non-builtin adapter), Weaviate is
     configured with no vectorizer — vectors are passed explicitly on each insert.
 
-    When weaviate_cfg.quantization is "pq" or "bq", the HNSW index is created
-    with the corresponding quantizer to reduce RAM usage significantly.
-    NOTE: quantization cannot be added to an existing collection — it must be set
-    at creation time. A full re-index is required to apply it retroactively.
+    When weaviate_cfg.quantization is "pq", "bq", or "sq", the HNSW index is created
+    with the corresponding quantizer to reduce RAM usage. Optional weaviate_cfg.hnsw
+    settings (ef, max_connections) are applied at creation time.
+    NOTE: quantization cannot be added to an existing collection -- a full re-index
+    is required. max_connections is IMMUTABLE after creation; ef is mutable via
+    collection.config.update(vector_index_config=Reconfigure.VectorIndex.hnsw(ef=N)).
     """
     name = weaviate_cfg.collection
     if client.collections.exists(name):
