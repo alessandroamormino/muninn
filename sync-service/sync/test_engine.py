@@ -247,3 +247,55 @@ class TestRunFull:
             engine, _ = self._make_engine_with_mock_create(app_cfg, mock_client, state_store)
             engine.run_full()
         mock_client.collections.delete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Phase 13.2: quantization_warning in _build_stats (D-21/D-22)
+# ---------------------------------------------------------------------------
+
+
+class TestQuantizationWarning:
+    """_build_stats emits quantization_warning only when total > 50K and quantization == 'none'."""
+
+    def _make_engine(self, csv_file, mock_client, state_store, quantization="none"):
+        from sync.engine import SyncEngine
+        src = SourceConfig(type="csv", file_path=csv_file, id_field="id")
+        syn = SyncConfig(hash_fields=["id"])
+        wea = WeaviateConfig(
+            collection="TestCol",
+            text_fields=["name"],
+            metadata_fields=["id"],
+            quantization=quantization,
+        )
+        emb = EmbeddingConfig(type="weaviate_builtin", model="text2vec-transformers")
+        cfg = AppConfig(source=src, sync=syn, weaviate=wea, embedding=emb)
+        return SyncEngine(cfg, mock_client, state_store)
+
+    def test_warning_present_when_total_exceeds_threshold_and_no_quantization(
+        self, csv_file, mock_client, state_store
+    ):
+        """total > 50_000 + quantization='none' → quantization_warning key present in stats."""
+        from sync.engine import SyncEngine
+        engine = self._make_engine(csv_file, mock_client, state_store, quantization="none")
+        result = _UpsertResult(inserted=50_001, updated=0, skipped=0)
+        stats = engine._build_stats(result, skipped=0)
+        assert "quantization_warning" in stats
+        assert "50,001" in stats["quantization_warning"] or "50001" in stats["quantization_warning"]
+
+    def test_warning_absent_when_total_at_boundary(
+        self, csv_file, mock_client, state_store
+    ):
+        """total == 50_000 (not > 50_000) → quantization_warning NOT in stats."""
+        engine = self._make_engine(csv_file, mock_client, state_store, quantization="none")
+        result = _UpsertResult(inserted=50_000, updated=0, skipped=0)
+        stats = engine._build_stats(result, skipped=0)
+        assert "quantization_warning" not in stats
+
+    def test_warning_absent_when_quantization_set(
+        self, csv_file, mock_client, state_store
+    ):
+        """total > 50_000 but quantization='pq' → quantization_warning NOT emitted."""
+        engine = self._make_engine(csv_file, mock_client, state_store, quantization="pq")
+        result = _UpsertResult(inserted=100_000, updated=0, skipped=0)
+        stats = engine._build_stats(result, skipped=0)
+        assert "quantization_warning" not in stats
