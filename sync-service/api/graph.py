@@ -28,6 +28,7 @@ from sklearn.cluster import HDBSCAN
 from auth.dependencies import get_current_user
 from auth.user_store import UserRecord
 
+from api.setup import _sanitize_cell
 from config.settings import _CONFIG_PATH, AppConfig, load_config, settings
 from llm.ollama_llm import LLMError, OllamaLLMClient
 from weaviate_store.client import get_client
@@ -222,7 +223,7 @@ async def get_graph(
         for cid in cluster_ids:
             size = int(sum(1 for lbl in labels if int(lbl) == cid))
             sample_titles = [
-                str(next(iter(n["props"].values()), n["id"]))
+                _sanitize_cell(str(next(iter(n["props"].values()), n["id"])))
                 for n in nodes[:5]
                 if n["cluster"] == cid
             ]
