@@ -299,3 +299,58 @@ class TestQuantizationWarning:
         result = _UpsertResult(inserted=100_000, updated=0, skipped=0)
         stats = engine._build_stats(result, skipped=0)
         assert "quantization_warning" not in stats
+
+
+class TestSyncEngineIdField:
+    """_id_field derivation: MySQL uses source.mysql.query.id_field; others use source.id_field."""
+
+    def _make_mysql_cfg(self, csv_file: str, mysql_id_field: str, source_id_field: str = "id") -> AppConfig:
+        from config.settings import MySQLConfig, MySQLQueryConfig
+        mysql_query = MySQLQueryConfig.model_validate({
+            "from": "mytable",
+            "fields": ["myid", "name"],
+            "id_field": mysql_id_field,
+            "hash_fields": ["myid"],
+        })
+        mysql = MySQLConfig(
+            host="localhost", port=3306, database="db",
+            user="u", password="p", query=mysql_query,
+        )
+        src = SourceConfig(type="mysql", id_field=source_id_field, mysql=mysql)
+        syn = SyncConfig(hash_fields=["myid"])
+        wea = WeaviateConfig(collection="T", text_fields=["name"], metadata_fields=["myid"])
+        emb = EmbeddingConfig(type="weaviate_builtin", model="text2vec-transformers")
+        return AppConfig(source=src, sync=syn, weaviate=wea, embedding=emb)
+
+    def test_mysql_uses_query_id_field(self, csv_file, mock_client, state_store):
+        """When source.type='mysql', _id_field comes from source.mysql.query.id_field."""
+        from sync.engine import SyncEngine
+        cfg = self._make_mysql_cfg(csv_file, mysql_id_field="Collaboratore", source_id_field="id")
+        with patch("sync.engine.build_source_adapter"), \
+             patch("sync.engine.build_embedding_adapter") as mock_emb, \
+             patch("sync.engine.create_collection_if_missing"):
+            mock_emb.return_value = None
+            engine = SyncEngine(cfg, mock_client, state_store)
+        assert engine._id_field == "Collaboratore"
+
+    def test_mysql_source_id_field_ignored(self, csv_file, mock_client, state_store):
+        """source.id_field top-level is NOT used when source.type='mysql'."""
+        from sync.engine import SyncEngine
+        cfg = self._make_mysql_cfg(csv_file, mysql_id_field="Collaboratore", source_id_field="wrong_id")
+        with patch("sync.engine.build_source_adapter"), \
+             patch("sync.engine.build_embedding_adapter") as mock_emb, \
+             patch("sync.engine.create_collection_if_missing"):
+            mock_emb.return_value = None
+            engine = SyncEngine(cfg, mock_client, state_store)
+        assert engine._id_field == "Collaboratore"
+        assert engine._id_field != "wrong_id"
+
+    def test_csv_uses_source_id_field(self, csv_file, mock_client, state_store):
+        """For non-MySQL sources, _id_field comes from source.id_field."""
+        from sync.engine import SyncEngine
+        cfg = _make_app_cfg(csv_file)  # type=csv, id_field="id"
+        with patch("sync.engine.build_embedding_adapter") as mock_emb, \
+             patch("sync.engine.create_collection_if_missing"):
+            mock_emb.return_value = None
+            engine = SyncEngine(cfg, mock_client, state_store)
+        assert engine._id_field == "id"

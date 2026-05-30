@@ -61,6 +61,15 @@ class SyncEngine:
         )
         # Iniettabile nei test tramite override: engine._write_model_version_fn = mock_fn
         self._write_model_version_fn = _default_write_model_version
+        # Effective id_field: for MySQL the authoritative value lives in source.mysql.query.id_field;
+        # for all other adapters it lives at source.id_field (top-level SourceConfig).
+        if (
+            app_cfg.source.type == "mysql"
+            and app_cfg.source.mysql is not None
+        ):
+            self._id_field: str = app_cfg.source.mysql.query.id_field
+        else:
+            self._id_field = app_cfg.source.id_field
 
     # ------------------------------------------------------------------
     # Public API
@@ -91,7 +100,7 @@ class SyncEngine:
 
         result = upsert_records(
             self._client, delta, self._cfg.weaviate, self._cfg.source.type, self._embedding_adapter,
-            id_field=self._cfg.source.id_field,
+            id_field=self._id_field,
             on_batch_done=lambda bn, done, total: on_progress("embedding", done, total) if on_progress else None,
         )
         if result.skipped == 0:
@@ -155,7 +164,7 @@ class SyncEngine:
 
         result = upsert_records(
             self._client, records, self._cfg.weaviate, self._cfg.source.type, self._embedding_adapter,
-            id_field=self._cfg.source.id_field,
+            id_field=self._id_field,
             start_from_batch=start_from_batch,
             on_batch_done=_on_batch_done,
         )

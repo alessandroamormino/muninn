@@ -15,7 +15,9 @@ from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
 
-from fastapi import Depends, FastAPI, Request, Response
+import re
+from typing import Optional
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -36,7 +38,7 @@ from scheduler import build_scheduler
 from sync.log_store import LogStore
 from sync.history_store import HistoryStore
 from sync.cache_adapters import build_cache_adapter
-from config.settings import settings
+from config.settings import _CONFIG_PATH, load_config, settings
 from embeddings import build_embedding_adapter
 from sync.engine import SyncEngine
 from sync.state_store import StateStore
@@ -172,29 +174,46 @@ async def health(response: Response) -> dict:
     return {"status": "weaviate_unreachable"}
 
 
+_INFO_COLLECTION_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+_INFO_CONFIG_ROOT = _CONFIG_PATH.parent
+
+
 @app.get("/info")
-async def info(_: UserRecord = Depends(get_current_user)) -> dict:
+async def info(
+    collection: Optional[str] = Query(None, description="Nome collection (es. 'CollaboratoriDB'). Se omesso usa config globale."),
+    _: UserRecord = Depends(get_current_user),
+) -> dict:
     """Service info. Adds total_objects from a live aggregate query.
 
     Per CONTEXT.md D-06: total_objects is null on any Weaviate failure rather
     than raising and surfacing a 5xx. All other keys preserved verbatim.
     """
+    if collection is not None:
+        if not _INFO_COLLECTION_RE.match(collection):
+            raise HTTPException(status_code=422, detail="Invalid collection name")
+        config_path = _INFO_CONFIG_ROOT / collection / "config.yaml"
+        if not config_path.exists():
+            raise HTTPException(status_code=404, detail=f"No config found for collection '{collection}'.")
+        cfg = load_config(config_path)
+    else:
+        cfg = settings
+
     total_objects: int | None = None
     try:
         agg = (
             get_client()
-            .collections.get(settings.weaviate.collection)
+            .collections.get(cfg.weaviate.collection)
             .aggregate.over_all(total_count=True)
         )
         total_objects = agg.total_count
     except Exception:  # noqa: BLE001
         pass
     return {
-        "embedding_model": settings.embedding.model,
-        "embedding_type": settings.embedding.type,
-        "collection": settings.weaviate.collection,
+        "embedding_model": cfg.embedding.model,
+        "embedding_type": cfg.embedding.type,
+        "collection": cfg.weaviate.collection,
         "weaviate_url": settings.weaviate_url,
-        "sync_mode": settings.sync.mode,
-        "sync_schedule": settings.sync.schedule,
+        "sync_mode": cfg.sync.mode,
+        "sync_schedule": cfg.sync.schedule,
         "total_objects": total_objects,
     }
