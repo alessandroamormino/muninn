@@ -4,6 +4,9 @@
 # Data files (may contain sensitive information)
 data/
 
+# Per-entity configuration (may contain DB credentials via ${VAR} references)
+configuration/
+
 # Python artifacts
 __pycache__/
 *.py[cod]
