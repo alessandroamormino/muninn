@@ -1,5 +1,4 @@
 import { NavLink } from 'react-router'
-import { useCollections } from '@/api/collections'
 import { Separator } from '@/components/ui/separator'
 
 const NAV = [
@@ -10,7 +9,6 @@ const NAV = [
 ]
 
 export default function Sidebar() {
-  const { data, isLoading, isError } = useCollections()
   return (
     <aside className="w-60 border-r bg-card flex flex-col">
       <div className="h-14 border-b flex items-center px-4 text-base font-semibold">smart-search</div>
@@ -32,17 +30,6 @@ export default function Sidebar() {
         ))}
       </nav>
       <Separator />
-      <div className="p-4 text-xs text-muted-foreground">
-        <div className="font-medium mb-1">Entities</div>
-        {isLoading && <div>Loading...</div>}
-        {isError && <div className="text-destructive">Unreachable</div>}
-        {data?.collections?.length === 0 && <div>None configured</div>}
-        <ul className="space-y-1">
-          {data?.collections?.map((c) => (
-            <li key={c} className="font-mono">{c}</li>
-          ))}
-        </ul>
-      </div>
     </aside>
   )
 }

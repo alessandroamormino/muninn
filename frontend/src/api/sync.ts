@@ -16,6 +16,7 @@ export function useTriggerSync() {
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['logs'] })
+      qc.invalidateQueries({ queryKey: ['sync-status'] })
     },
   })
 }
@@ -34,7 +35,7 @@ export function useIncrementalSync() {
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['logs'] })
-      qc.invalidateQueries({ queryKey: ['syncStatus'] })
+      qc.invalidateQueries({ queryKey: ['sync-status'] })
     },
   })
 }

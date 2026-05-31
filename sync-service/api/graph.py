@@ -68,17 +68,37 @@ def _validate_collection_name(name: str) -> None:
 async def list_collections(_: UserRecord = Depends(get_current_user)) -> dict:
     """List all configured collections by scanning configuration/ subdirectories.
 
-    Returns {"collections": [...]} sorted alphabetically.
+    Returns {"collections": [{name, source_type, is_global}, ...]} sorted alphabetically.
     Each directory under _CONFIG_ROOT that contains a config.yaml is a valid collection.
+    The root configuration/config.yaml (global fallback) is appended last with is_global=True,
+    only when no per-entity directory already claims its collection name.
+    source_type is read from the config; falls back to "unknown" on parse error.
     """
     if not _CONFIG_ROOT.exists():
         return {"collections": []}
-    names = sorted(
-        d.name
-        for d in _CONFIG_ROOT.iterdir()
-        if d.is_dir() and (d / "config.yaml").exists()
-    )
-    return {"collections": names}
+    items = []
+    for d in sorted(_CONFIG_ROOT.iterdir()):
+        if not (d.is_dir() and (d / "config.yaml").exists()):
+            continue
+        source_type = "unknown"
+        try:
+            cfg = load_config(d / "config.yaml")
+            source_type = cfg.source.type
+        except Exception:  # noqa: BLE001
+            pass
+        items.append({"name": d.name, "source_type": source_type, "is_global": False})
+
+    global_yaml = _CONFIG_ROOT / "config.yaml"
+    if global_yaml.exists():
+        try:
+            gcfg = load_config(global_yaml)
+            gname = gcfg.weaviate.collection
+            if not any(it["name"] == gname for it in items):
+                items.append({"name": gname, "source_type": gcfg.source.type, "is_global": True})
+        except Exception:  # noqa: BLE001
+            pass
+
+    return {"collections": items}
 
 
 @router.get("/graph/{collection}")

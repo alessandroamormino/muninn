@@ -2,6 +2,12 @@ import { useQuery } from '@tanstack/react-query'
 import { createApiClient } from './fetchJson'
 import { useAuth } from '../context/AuthContext'
 
+export interface CollectionItem {
+  name: string
+  source_type: string
+  is_global?: boolean
+}
+
 export function useCollections() {
   const { token } = useAuth()
   const on401 = () => (window as unknown as { __on401?: () => void }).__on401?.()
@@ -9,7 +15,7 @@ export function useCollections() {
 
   return useQuery({
     queryKey: ['collections'],
-    queryFn: () => fetchJson<{ collections: string[] }>('/api/collections'),
-    staleTime: 60_000,
+    queryFn: () => fetchJson<{ collections: CollectionItem[] }>('/api/collections'),
+    staleTime: 10_000,
   })
 }

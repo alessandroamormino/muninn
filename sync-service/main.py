@@ -193,9 +193,23 @@ async def info(
     if collection is not None:
         if not _INFO_COLLECTION_RE.match(collection):
             raise HTTPException(status_code=422, detail="Invalid collection name")
+        # Per-entity path first; fall back to global config.yaml if its collection matches
         config_path = _INFO_CONFIG_ROOT / collection / "config.yaml"
         if not config_path.exists():
-            raise HTTPException(status_code=404, detail=f"No config found for collection '{collection}'.")
+            global_path = _INFO_CONFIG_ROOT / "config.yaml"
+            if global_path.exists():
+                try:
+                    gcfg = load_config(global_path)
+                    if gcfg.weaviate.collection == collection:
+                        config_path = global_path
+                    else:
+                        raise HTTPException(status_code=404, detail=f"No config found for collection '{collection}'.")
+                except HTTPException:
+                    raise
+                except Exception:  # noqa: BLE001
+                    raise HTTPException(status_code=404, detail=f"No config found for collection '{collection}'.")
+            else:
+                raise HTTPException(status_code=404, detail=f"No config found for collection '{collection}'.")
         cfg = load_config(config_path)
     else:
         cfg = settings

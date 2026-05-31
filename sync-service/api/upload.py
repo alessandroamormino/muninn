@@ -45,6 +45,27 @@ _COLLECTION_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 # T-11-09: env var name validation — only valid uppercase identifiers allowed
 _ENV_VAR_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
+_GLOBAL_CONFIG = _CONFIG_ROOT / "config.yaml"
+
+
+def _resolve_config_path(collection: str) -> Path | None:
+    """Return the config.yaml path for a collection.
+
+    Checks per-entity directory first; falls back to the root config.yaml when
+    its weaviate.collection matches. Returns None if neither resolves.
+    """
+    per_entity = _CONFIG_ROOT / collection / "config.yaml"
+    if per_entity.exists():
+        return per_entity
+    if _GLOBAL_CONFIG.exists():
+        try:
+            gcfg = load_config(_GLOBAL_CONFIG)
+            if gcfg.weaviate.collection == collection:
+                return _GLOBAL_CONFIG
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
 
 class ConfirmRequest(BaseModel):
     file_name: str          # original uploaded filename, e.g. "collaboratori.csv"
@@ -210,7 +231,7 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "",
         else:
             result = engine.run_incremental()
 
-        app_state.sync_status = {"status": "completed", "last_run": {**result}}
+        app_state.sync_status = {"status": "completed", "collection": temp_cfg.weaviate.collection, "last_run": {**result, "collection": temp_cfg.weaviate.collection}}
         if app_state.upload_status:
             app_state.upload_status["status"] = "done"
             app_state.upload_status["sync_status"] = app_state.sync_status
@@ -240,7 +261,9 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "",
         took_ms = int((time.perf_counter() - _t0) * 1000)
         app_state.sync_status = {
             "status": "failed",
+            "collection": collection_hint,
             "last_run": {
+                "collection": collection_hint,
                 "error": str(exc),
                 "took_ms": took_ms,
                 "timestamp": _dt.datetime.now(tz=_dt.timezone.utc).isoformat(),
@@ -448,12 +471,9 @@ async def trigger_full_sync_by_collection(
     """Trigger a full sync for a specific collection. T-11-07: validates collection name."""
     if not _COLLECTION_RE.match(collection):
         raise HTTPException(status_code=422, detail="Invalid collection name")
-    config_path = _CONFIG_ROOT / collection / "config.yaml"
-    if not config_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"No config found for collection '{collection}'",
-        )
+    config_path = _resolve_config_path(collection)
+    if config_path is None:
+        raise HTTPException(status_code=404, detail=f"No config found for collection '{collection}'")
     lock_acquired = False
     try:
         if not request.app.state.sync_lock.acquire(blocking=False):
@@ -463,6 +483,7 @@ async def trigger_full_sync_by_collection(
         request.app.state.upload_status["status"] = "syncing"
         request.app.state.sync_status = request.app.state.sync_status or {}
         request.app.state.sync_status["status"] = "running"
+        request.app.state.sync_status["collection"] = collection
         background_tasks.add_task(_run_upload_sync_bg, request.app.state, config_path, collection, "full")
         lock_acquired = False  # background task now owns the lock release
     except Exception:
@@ -482,12 +503,9 @@ async def trigger_incremental_sync_by_collection(
     """Trigger an INCREMENTAL sync for a specific collection. T-14.1-08: validates collection name."""
     if not _COLLECTION_RE.match(collection):
         raise HTTPException(status_code=422, detail="Invalid collection name")
-    config_path = _CONFIG_ROOT / collection / "config.yaml"
-    if not config_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"No config found for collection '{collection}'",
-        )
+    config_path = _resolve_config_path(collection)
+    if config_path is None:
+        raise HTTPException(status_code=404, detail=f"No config found for collection '{collection}'")
     lock_acquired = False
     try:
         if not request.app.state.sync_lock.acquire(blocking=False):
@@ -495,6 +513,7 @@ async def trigger_incremental_sync_by_collection(
         lock_acquired = True
         request.app.state.sync_status = request.app.state.sync_status or {}
         request.app.state.sync_status["status"] = "running"
+        request.app.state.sync_status["collection"] = collection
         background_tasks.add_task(_run_upload_sync_bg, request.app.state, config_path, collection, "incremental")
         lock_acquired = False  # background task now owns the lock release
     except Exception:

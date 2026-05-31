@@ -63,8 +63,16 @@ function applyFieldSuggestions(yaml: string, suggested: SuggestedFields): string
     const blockMatch = line.match(/^(\s*)(text_fields|metadata_fields|output_fields):\s*$/)
     if (blockMatch) {
       const [, indent, key] = blockMatch as [string, string, (typeof keys)[number]]
-      out.push(`${indent}${key}: [${suggested[key].join(', ')}]`)
-      // Skip the block sequence items that follow
+      // Detect child indent from next line, fallback to indent + 2 spaces
+      const nextLine = lines[i + 1]
+      let childIndent = indent + '  '
+      if (nextLine) {
+        const m = nextLine.match(/^(\s+)-/)
+        if (m) childIndent = m[1]
+      }
+      out.push(`${indent}${key}:`)
+      for (const val of suggested[key]) out.push(`${childIndent}- ${val}`)
+      // Skip the old block sequence items that follow
       while (i + 1 < lines.length && /^\s+-\s/.test(lines[i + 1])) i++
       continue
     }
@@ -107,130 +115,41 @@ function lineDiff(a: string[], b: string[]): DiffEntry[] {
   return result
 }
 
-// Convert flat diff to split-view rows.
-// Consecutive remove+add pairs are collapsed onto the same row (changed line).
+// ─── Unified diff renderer ────────────────────────────────────────────────────
 
-type SplitRow = {
-  leftText: string
-  leftKind: 'same' | 'remove' | 'empty'
-  rightText: string
-  rightKind: 'same' | 'add' | 'empty'
-}
-
-function buildSplitRows(diff: DiffEntry[]): SplitRow[] {
-  const rows: SplitRow[] = []
-  let i = 0
-  while (i < diff.length) {
-    const d = diff[i]
-    if (d.type === 'same') {
-      rows.push({ leftText: d.value, leftKind: 'same', rightText: d.value, rightKind: 'same' })
-      i++
-    } else if (d.type === 'remove' && i + 1 < diff.length && diff[i + 1].type === 'add') {
-      // Changed line: pair remove + add on the same row
-      rows.push({
-        leftText: d.value,
-        leftKind: 'remove',
-        rightText: diff[i + 1].value,
-        rightKind: 'add',
-      })
-      i += 2
-    } else if (d.type === 'remove') {
-      rows.push({ leftText: d.value, leftKind: 'remove', rightText: '', rightKind: 'empty' })
-      i++
-    } else {
-      // add
-      rows.push({ leftText: '', leftKind: 'empty', rightText: d.value, rightKind: 'add' })
-      i++
-    }
-  }
-  return rows
-}
-
-// ─── Split diff renderer ──────────────────────────────────────────────────────
-
-const kindStyle: Record<string, string> = {
-  same: 'bg-transparent',
-  remove: 'bg-red-50 text-red-900',
-  add: 'bg-green-50 text-green-900',
-  empty: 'bg-muted/40',
-}
-
-const kindPrefix: Record<string, string> = {
-  same: ' ',
-  remove: '-',
-  add: '+',
-  empty: ' ',
-}
-
-function SplitDiff({ oldYaml, newYaml }: { oldYaml: string; newYaml: string }) {
-  const rows = useMemo(() => {
-    const diff = lineDiff(oldYaml.split('\n'), newYaml.split('\n'))
-    return buildSplitRows(diff)
-  }, [oldYaml, newYaml])
-
-  const Cell = ({
-    text,
-    kind,
-    lineNo,
-  }: {
-    text: string
-    kind: SplitRow['leftKind'] | SplitRow['rightKind']
-    lineNo: number | null
-  }) => (
-    <div className={`flex min-w-0 ${kindStyle[kind]}`}>
-      <span className="select-none w-10 shrink-0 text-right pr-2 text-muted-foreground/50 border-r border-border text-[10px] leading-5">
-        {lineNo ?? ''}
-      </span>
-      <span className="select-none w-4 shrink-0 text-center text-[10px] leading-5 text-muted-foreground/60">
-        {kindPrefix[kind]}
-      </span>
-      <span className="font-mono text-xs leading-5 whitespace-pre px-1 flex-1 overflow-x-auto">
-        {text}
-      </span>
-    </div>
+function UnifiedDiff({ oldYaml, newYaml }: { oldYaml: string; newYaml: string }) {
+  const entries = useMemo(
+    () => lineDiff(oldYaml.split('\n'), newYaml.split('\n')),
+    [oldYaml, newYaml],
   )
 
-  // Assign line numbers per side
-  let leftNo = 0
-  let rightNo = 0
-
   return (
-    <div className="flex border rounded-md overflow-hidden text-sm divide-x divide-border">
-      {/* Left panel — old */}
-      <div className="flex-1 min-w-0 overflow-auto max-h-[400px]">
-        <div className="px-1 py-0.5 text-xs font-medium bg-muted text-muted-foreground border-b">
-          Attuale
-        </div>
-        {rows.map((row, idx) => {
-          if (row.leftKind !== 'empty') leftNo++
-          return (
-            <Cell
-              key={idx}
-              text={row.leftText}
-              kind={row.leftKind}
-              lineNo={row.leftKind !== 'empty' ? leftNo : null}
-            />
-          )
-        })}
-      </div>
-
-      {/* Right panel — new */}
-      <div className="flex-1 min-w-0 overflow-auto max-h-[400px]">
-        <div className="px-1 py-0.5 text-xs font-medium bg-muted text-muted-foreground border-b">
-          Suggerito
-        </div>
-        {rows.map((row, idx) => {
-          if (row.rightKind !== 'empty') rightNo++
-          return (
-            <Cell
-              key={idx}
-              text={row.rightText}
-              kind={row.rightKind}
-              lineNo={row.rightKind !== 'empty' ? rightNo : null}
-            />
-          )
-        })}
-      </div>
+    <div className="border rounded-md overflow-auto max-h-[420px] text-sm">
+      {entries.map((entry, idx) => {
+        const isRemove = entry.type === 'remove'
+        const isAdd = entry.type === 'add'
+        return (
+          <div
+            key={idx}
+            className={`flex min-w-0 ${isRemove ? 'bg-red-50' : isAdd ? 'bg-green-50' : ''}`}
+          >
+            <span
+              className={`select-none w-5 shrink-0 text-center font-bold text-[11px] leading-5 ${
+                isRemove ? 'text-red-600' : isAdd ? 'text-green-600' : 'text-transparent'
+              }`}
+            >
+              {isRemove ? '-' : isAdd ? '+' : ' '}
+            </span>
+            <span
+              className={`font-mono text-xs leading-5 whitespace-pre px-1 flex-1 ${
+                isRemove ? 'text-red-900' : isAdd ? 'text-green-900' : ''
+              }`}
+            >
+              {entry.value}
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -339,7 +258,7 @@ export default function YamlEditor({ collection }: { collection: string }) {
             oppure <strong>Annulla</strong> per scartare.
           </p>
 
-          <SplitDiff oldYaml={yamlContent} newYaml={suggestedYaml} />
+          <UnifiedDiff oldYaml={yamlContent} newYaml={suggestedYaml} />
 
           <div className="flex gap-2">
             <Button onClick={handleAccept}>Applica suggerimenti</Button>

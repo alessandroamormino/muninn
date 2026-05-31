@@ -17,7 +17,7 @@ from auth.dependencies import get_current_user, require_admin
 from auth.user_store import UserRecord
 
 # Import shared symbols from api/upload.py — single source of truth (T-14.1-01)
-from api.upload import _write_config, _CONFIG_ROOT, _COLLECTION_RE, _ENV_VAR_RE
+from api.upload import _write_config, _CONFIG_ROOT, _COLLECTION_RE, _ENV_VAR_RE, _resolve_config_path
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -63,12 +63,9 @@ async def get_config(
     """
     if not _COLLECTION_RE.match(collection):
         raise HTTPException(status_code=422, detail="Invalid collection name")
-    config_path = _CONFIG_ROOT / collection / "config.yaml"
-    if not config_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"No config found for '{collection}'",
-        )
+    config_path = _resolve_config_path(collection)
+    if config_path is None:
+        raise HTTPException(status_code=404, detail=f"No config found for '{collection}'")
     return {"yaml": config_path.read_text(encoding="utf-8")}
 
 
@@ -91,12 +88,9 @@ async def update_config(
     """
     if not _COLLECTION_RE.match(collection):
         raise HTTPException(status_code=422, detail="Invalid collection name")
-    config_path = _CONFIG_ROOT / collection / "config.yaml"
-    if not config_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"No config found for '{collection}'",
-        )
+    config_path = _resolve_config_path(collection)
+    if config_path is None:
+        raise HTTPException(status_code=404, detail=f"No config found for '{collection}'")
     # T-14.1-02: validate YAML before writing
     try:
         parsed = yaml.safe_load(body.yaml)

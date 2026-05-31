@@ -22,7 +22,9 @@ export default function EntityDropdown({ value, onChange, placeholder = 'Select 
       </SelectTrigger>
       <SelectContent>
         {collections.map((c) => (
-          <SelectItem key={c} value={c}>{c}</SelectItem>
+          <SelectItem key={c.name} value={c.name}>
+            {c.name}{c.is_global ? ' (default)' : ''}
+          </SelectItem>
         ))}
       </SelectContent>
     </Select>
