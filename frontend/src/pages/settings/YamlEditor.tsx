@@ -1,14 +1,3 @@
-/**
- * YamlEditor — YAML config editor with dirty state tracking, save/reload, and
- * a "Suggest fields" toolbar button.
- *
- * YAML field extraction: js-yaml is NOT installed in this project, so we use a
- * best-effort regex-based extractor for text_fields and metadata_fields. It handles
- * both inline-flow (`text_fields: [a, b]`) and block-sequence (`text_fields:\n  - a`)
- * styles. Per UI-SPEC: this fallback is acceptable for the "Suggest fields" path
- * because the extracted list only drives the POST /setup/suggest-config-from-fields
- * call — any parse miss just results in fewer field suggestions.
- */
 import { useState, useEffect, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import { useGetConfig, useSaveConfig } from '@/api/config'
@@ -16,46 +5,237 @@ import SuggestConfigButton from './SuggestConfigButton'
 import type { SuggestFieldsResponse } from '@/api/config'
 import { toast } from 'sonner'
 
-/**
- * Extract the union of weaviate.text_fields + weaviate.metadata_fields from raw YAML text.
- * Supports both inline-flow `key: [a, b, c]` and block-sequence `key:\n  - a\n  - b` forms.
- * Returns a deduplicated, ordered array. Returns [] on parse failure or empty result.
- */
+// ─── YAML field extraction ────────────────────────────────────────────────────
+// js-yaml is not installed; best-effort regex for inline + block sequences.
+
 function extractTextAndMetadataFields(yaml: string): string[] {
   const result: string[] = []
-
   for (const key of ['text_fields', 'metadata_fields']) {
-    // Inline flow: text_fields: [a, b, c]
     const inlineMatch = new RegExp(`^\\s*${key}:\\s*\\[([^\\]\\n]*)\\]`, 'm').exec(yaml)
     if (inlineMatch) {
-      const items = inlineMatch[1]
-        .split(',')
-        .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
-        .filter(Boolean)
-      result.push(...items)
+      result.push(
+        ...inlineMatch[1]
+          .split(',')
+          .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
+          .filter(Boolean),
+      )
+      continue
+    }
+    const blockMatch = new RegExp(`^(\\s*)${key}:\\s*$`, 'm').exec(yaml)
+    if (blockMatch) {
+      const rest = yaml.slice(blockMatch.index + blockMatch[0].length)
+      let m
+      const re = /^[ \t]+-[ \t]+(.+)$/gm
+      while ((m = re.exec(rest)) !== null)
+        result.push(m[1].trim().replace(/^['"]|['"]$/g, ''))
+    }
+  }
+  return [...new Set(result)].filter(Boolean)
+}
+
+// ─── YAML field patching ──────────────────────────────────────────────────────
+// Replaces text_fields / metadata_fields / output_fields with suggested values.
+// Handles both inline `key: [a, b]` and block-sequence `key:\n  - a` forms.
+// Always writes inline form in the output (simpler, avoids re-indenting).
+
+type SuggestedFields = Pick<
+  SuggestFieldsResponse['suggested_config'],
+  'text_fields' | 'metadata_fields' | 'output_fields'
+>
+
+function applyFieldSuggestions(yaml: string, suggested: SuggestedFields): string {
+  const lines = yaml.split('\n')
+  const out: string[] = []
+  const keys = ['text_fields', 'metadata_fields', 'output_fields'] as const
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+
+    // Inline form: `  key: [a, b, c]`
+    const inlineMatch = line.match(/^(\s*)(text_fields|metadata_fields|output_fields):\s*\[/)
+    if (inlineMatch) {
+      const [, indent, key] = inlineMatch as [string, string, (typeof keys)[number]]
+      out.push(`${indent}${key}: [${suggested[key].join(', ')}]`)
       continue
     }
 
-    // Block sequence: text_fields:\n  - a\n  - b
-    const blockRe = new RegExp(`^(\\s*)${key}:\\s*$`, 'm')
-    const blockMatch = blockRe.exec(yaml)
+    // Block sequence header: `  key:`
+    const blockMatch = line.match(/^(\s*)(text_fields|metadata_fields|output_fields):\s*$/)
     if (blockMatch) {
-      const startIdx = blockMatch.index + blockMatch[0].length
-      const rest = yaml.slice(startIdx)
-      const listItemRe = /^[ \t]+-[ \t]+(.+)$/gm
-      let m
-      while ((m = listItemRe.exec(rest)) !== null) {
-        // stop when we hit a line that doesn't start with whitespace + dash (next key)
-        const lineStart = rest.slice(0, m.index).match(/\n?$/)
-        if (!lineStart) break
-        result.push(m[1].trim().replace(/^['"]|['"]$/g, ''))
-      }
+      const [, indent, key] = blockMatch as [string, string, (typeof keys)[number]]
+      out.push(`${indent}${key}: [${suggested[key].join(', ')}]`)
+      // Skip the block sequence items that follow
+      while (i + 1 < lines.length && /^\s+-\s/.test(lines[i + 1])) i++
+      continue
+    }
+
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
+// ─── LCS-based line diff ──────────────────────────────────────────────────────
+
+type DiffEntry = { type: 'same' | 'add' | 'remove'; value: string }
+
+function lineDiff(a: string[], b: string[]): DiffEntry[] {
+  const n = a.length
+  const m = b.length
+  // Build LCS table bottom-up
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0))
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] =
+        a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+
+  const result: DiffEntry[] = []
+  let i = 0,
+    j = 0
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) {
+      result.push({ type: 'same', value: a[i] })
+      i++
+      j++
+    } else if (j < m && (i >= n || dp[i][j + 1] >= dp[i + 1][j])) {
+      result.push({ type: 'add', value: b[j] })
+      j++
+    } else {
+      result.push({ type: 'remove', value: a[i] })
+      i++
     }
   }
-
-  // Deduplicate while preserving order
-  return [...new Set(result)].filter(Boolean)
+  return result
 }
+
+// Convert flat diff to split-view rows.
+// Consecutive remove+add pairs are collapsed onto the same row (changed line).
+
+type SplitRow = {
+  leftText: string
+  leftKind: 'same' | 'remove' | 'empty'
+  rightText: string
+  rightKind: 'same' | 'add' | 'empty'
+}
+
+function buildSplitRows(diff: DiffEntry[]): SplitRow[] {
+  const rows: SplitRow[] = []
+  let i = 0
+  while (i < diff.length) {
+    const d = diff[i]
+    if (d.type === 'same') {
+      rows.push({ leftText: d.value, leftKind: 'same', rightText: d.value, rightKind: 'same' })
+      i++
+    } else if (d.type === 'remove' && i + 1 < diff.length && diff[i + 1].type === 'add') {
+      // Changed line: pair remove + add on the same row
+      rows.push({
+        leftText: d.value,
+        leftKind: 'remove',
+        rightText: diff[i + 1].value,
+        rightKind: 'add',
+      })
+      i += 2
+    } else if (d.type === 'remove') {
+      rows.push({ leftText: d.value, leftKind: 'remove', rightText: '', rightKind: 'empty' })
+      i++
+    } else {
+      // add
+      rows.push({ leftText: '', leftKind: 'empty', rightText: d.value, rightKind: 'add' })
+      i++
+    }
+  }
+  return rows
+}
+
+// ─── Split diff renderer ──────────────────────────────────────────────────────
+
+const kindStyle: Record<string, string> = {
+  same: 'bg-transparent',
+  remove: 'bg-red-50 text-red-900',
+  add: 'bg-green-50 text-green-900',
+  empty: 'bg-muted/40',
+}
+
+const kindPrefix: Record<string, string> = {
+  same: ' ',
+  remove: '-',
+  add: '+',
+  empty: ' ',
+}
+
+function SplitDiff({ oldYaml, newYaml }: { oldYaml: string; newYaml: string }) {
+  const rows = useMemo(() => {
+    const diff = lineDiff(oldYaml.split('\n'), newYaml.split('\n'))
+    return buildSplitRows(diff)
+  }, [oldYaml, newYaml])
+
+  const Cell = ({
+    text,
+    kind,
+    lineNo,
+  }: {
+    text: string
+    kind: SplitRow['leftKind'] | SplitRow['rightKind']
+    lineNo: number | null
+  }) => (
+    <div className={`flex min-w-0 ${kindStyle[kind]}`}>
+      <span className="select-none w-10 shrink-0 text-right pr-2 text-muted-foreground/50 border-r border-border text-[10px] leading-5">
+        {lineNo ?? ''}
+      </span>
+      <span className="select-none w-4 shrink-0 text-center text-[10px] leading-5 text-muted-foreground/60">
+        {kindPrefix[kind]}
+      </span>
+      <span className="font-mono text-xs leading-5 whitespace-pre px-1 flex-1 overflow-x-auto">
+        {text}
+      </span>
+    </div>
+  )
+
+  // Assign line numbers per side
+  let leftNo = 0
+  let rightNo = 0
+
+  return (
+    <div className="flex border rounded-md overflow-hidden text-sm divide-x divide-border">
+      {/* Left panel — old */}
+      <div className="flex-1 min-w-0 overflow-auto max-h-[400px]">
+        <div className="px-1 py-0.5 text-xs font-medium bg-muted text-muted-foreground border-b">
+          Attuale
+        </div>
+        {rows.map((row, idx) => {
+          if (row.leftKind !== 'empty') leftNo++
+          return (
+            <Cell
+              key={idx}
+              text={row.leftText}
+              kind={row.leftKind}
+              lineNo={row.leftKind !== 'empty' ? leftNo : null}
+            />
+          )
+        })}
+      </div>
+
+      {/* Right panel — new */}
+      <div className="flex-1 min-w-0 overflow-auto max-h-[400px]">
+        <div className="px-1 py-0.5 text-xs font-medium bg-muted text-muted-foreground border-b">
+          Suggerito
+        </div>
+        {rows.map((row, idx) => {
+          if (row.rightKind !== 'empty') rightNo++
+          return (
+            <Cell
+              key={idx}
+              text={row.rightText}
+              kind={row.rightKind}
+              lineNo={row.rightKind !== 'empty' ? rightNo : null}
+            />
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ─── YamlEditor ──────────────────────────────────────────────────────────────
 
 export default function YamlEditor({ collection }: { collection: string }) {
   const { data: configData, refetch, isLoading } = useGetConfig(collection)
@@ -64,13 +244,14 @@ export default function YamlEditor({ collection }: { collection: string }) {
   const [yamlContent, setYamlContent] = useState('')
   const [savedYaml, setSavedYaml] = useState('')
   const [serverError, setServerError] = useState<string | null>(null)
+  // Non-null when a suggestion is pending review; holds the patched YAML.
+  const [suggestedYaml, setSuggestedYaml] = useState<string | null>(null)
 
   const isDirty = yamlContent !== savedYaml
 
-  // Single effect for both init and collection change.
-  // Two separate effects caused a mount-order bug: the collection-change effect fired
-  // after the data effect, overwriting cached YAML with '' on every tab switch.
+  // Single effect: initialize from cached/fetched data, reset on collection change.
   useEffect(() => {
+    setSuggestedYaml(null)
     if (configData?.yaml !== undefined) {
       setYamlContent(configData.yaml)
       setSavedYaml(configData.yaml)
@@ -81,16 +262,14 @@ export default function YamlEditor({ collection }: { collection: string }) {
     }
   }, [collection, configData?.yaml])
 
-  const parsedFields = useMemo(
-    () => extractTextAndMetadataFields(yamlContent),
-    [yamlContent],
-  )
+  const parsedFields = useMemo(() => extractTextAndMetadataFields(yamlContent), [yamlContent])
 
   const handleSave = async () => {
     setServerError(null)
     try {
       await save.mutateAsync(yamlContent)
       setSavedYaml(yamlContent)
+      setSuggestedYaml(null)
       toast.success('Config salvata.')
     } catch (e) {
       const msg = (e as Error).message
@@ -101,27 +280,33 @@ export default function YamlEditor({ collection }: { collection: string }) {
 
   const handleReload = async () => {
     if (isDirty && !window.confirm('Hai modifiche non salvate. Ricaricare dal disco?')) return
-    // Await refetch and explicitly reset state — without this, if the server returns the same
-    // YAML string the cache already holds, configData.yaml doesn't change, the effect dep
-    // doesn't fire, and the dirty content stays visible.
     const result = await refetch()
     const freshYaml = result.data?.yaml ?? configData?.yaml ?? ''
     setYamlContent(freshYaml)
     setSavedYaml(freshYaml)
+    setSuggestedYaml(null)
     setServerError(null)
   }
 
+  // Patch the current YAML with suggestions and enter diff-review mode.
   const handleSuggestResult = (suggested: SuggestFieldsResponse['suggested_config']) => {
-    // No js-yaml AST available — show a descriptive toast so the operator can paste values manually.
-    // This is an acceptable fallback per UI-SPEC Suggest-Config Integration.
-    toast.message('Suggested fields:', {
-      description: [
-        `text: ${suggested.text_fields.join(', ')}`,
-        `metadata: ${suggested.metadata_fields.join(', ')}`,
-        `output: ${suggested.output_fields.join(', ')}`,
-      ].join(' | '),
-    })
+    const patched = applyFieldSuggestions(yamlContent, suggested)
+    if (patched === yamlContent) {
+      toast.info('Nessuna modifica — i campi suggeriti coincidono con quelli attuali.')
+      return
+    }
+    setSuggestedYaml(patched)
   }
+
+  // Accept: apply suggested YAML as current content (dirty, not saved yet).
+  const handleAccept = () => {
+    if (suggestedYaml === null) return
+    setYamlContent(suggestedYaml)
+    setSuggestedYaml(null)
+    toast.info('Suggerimenti applicati — salva per rendere le modifiche permanenti.')
+  }
+
+  const handleDismiss = () => setSuggestedYaml(null)
 
   if (isLoading && !configData) {
     return <div className="text-muted-foreground text-sm">Loading config…</div>
@@ -129,46 +314,70 @@ export default function YamlEditor({ collection }: { collection: string }) {
 
   return (
     <div className="space-y-3 mt-4">
-      {/* Heading + dirty badge */}
-      <div className="flex items-center gap-2">
+      {/* Heading + badges */}
+      <div className="flex items-center gap-2 flex-wrap">
         <h3 className="text-base font-semibold">Config — {collection}</h3>
-        {isDirty && (
-          <span className="ml-2 inline-flex items-center rounded-md px-2 py-0.5 text-xs bg-amber-100 text-amber-700">
+        {isDirty && !suggestedYaml && (
+          <span className="inline-flex items-center rounded-md px-2 py-0.5 text-xs bg-amber-100 text-amber-700">
             Unsaved changes
+          </span>
+        )}
+        {suggestedYaml && (
+          <span className="inline-flex items-center rounded-md px-2 py-0.5 text-xs bg-blue-100 text-blue-700">
+            Revisione suggerimenti
           </span>
         )}
       </div>
 
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 mb-2">
-        <SuggestConfigButton
-          fields={parsedFields}
-          disabled={parsedFields.length === 0 || isLoading}
-          onResult={handleSuggestResult}
-        />
-      </div>
+      {suggestedYaml !== null ? (
+        // ── Diff review mode ──────────────────────────────────────────────────
+        <>
+          <p className="text-xs text-muted-foreground">
+            Righe in <span className="text-red-600 font-medium">rosso</span> verranno rimosse,
+            righe in <span className="text-green-600 font-medium">verde</span> aggiunte.
+            Clicca <strong>Applica</strong> per portare le modifiche nell'editor (senza salvare),
+            oppure <strong>Annulla</strong> per scartare.
+          </p>
 
-      {/* YAML textarea */}
-      <textarea
-        value={yamlContent}
-        onChange={(e) => setYamlContent(e.target.value)}
-        className="font-mono text-xs leading-relaxed bg-muted border rounded-md p-3 min-h-[320px] w-full resize-y"
-        spellCheck={false}
-      />
+          <SplitDiff oldYaml={yamlContent} newYaml={suggestedYaml} />
 
-      {/* Action buttons */}
-      <div className="flex gap-2">
-        <Button onClick={handleSave} disabled={!isDirty || save.isPending}>
-          {save.isPending ? 'Saving…' : 'Save changes'}
-        </Button>
-        <Button variant="outline" onClick={handleReload} disabled={save.isPending}>
-          Reload from disk
-        </Button>
-      </div>
+          <div className="flex gap-2">
+            <Button onClick={handleAccept}>Applica suggerimenti</Button>
+            <Button variant="outline" onClick={handleDismiss}>
+              Annulla
+            </Button>
+          </div>
+        </>
+      ) : (
+        // ── Normal editor mode ────────────────────────────────────────────────
+        <>
+          {/* Toolbar */}
+          <div className="flex items-center gap-2">
+            <SuggestConfigButton
+              fields={parsedFields}
+              disabled={parsedFields.length === 0 || isLoading}
+              onResult={handleSuggestResult}
+            />
+          </div>
 
-      {/* Server error */}
-      {serverError && (
-        <p className="text-destructive text-xs">{serverError}</p>
+          <textarea
+            value={yamlContent}
+            onChange={(e) => setYamlContent(e.target.value)}
+            className="font-mono text-xs leading-relaxed bg-muted border rounded-md p-3 min-h-[320px] w-full resize-y"
+            spellCheck={false}
+          />
+
+          <div className="flex gap-2">
+            <Button onClick={handleSave} disabled={!isDirty || save.isPending}>
+              {save.isPending ? 'Saving…' : 'Save changes'}
+            </Button>
+            <Button variant="outline" onClick={handleReload} disabled={save.isPending}>
+              Reload from disk
+            </Button>
+          </div>
+
+          {serverError && <p className="text-destructive text-xs">{serverError}</p>}
+        </>
       )}
     </div>
   )
