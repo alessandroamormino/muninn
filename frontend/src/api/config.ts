@@ -86,8 +86,9 @@ export function useSuggestConfigFromFields() {
 
 export interface CreateConfigPayload {
   collection: string
-  host_env_var: string
+  source_type: 'mysql'
   port: number
+  host_env_var: string
   db_env_var: string
   user_env_var: string
   password_env_var: string
