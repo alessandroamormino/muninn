@@ -3,6 +3,7 @@ import { useCollections } from '@/api/collections'
 import EntityList from './settings/EntityList'
 import UploadWizard from './settings/UploadWizard'
 import RestApiForm from './settings/RestApiForm'
+import MySQLWizard from './settings/MySQLWizard'
 import SyncTab from './settings/SyncTab'
 import YamlEditor from './settings/YamlEditor'
 import EntityInfoPanel from './settings/EntityInfoPanel'
@@ -45,17 +46,10 @@ export default function SettingsPage() {
           <RestApiForm onDone={(c) => setMode({ kind: 'view', collection: c })} />
         )}
         {mode.kind === 'new' && mode.sourceType === 'mysql' && (
-          <div className="text-sm text-muted-foreground">
-            <p className="font-medium text-foreground mb-2">MySQL source</p>
-            <p>
-              Crea manualmente il file{' '}
-              <code className="font-mono text-xs">configuration/{'<NomeEntity>'}/config.yaml</code>{' '}
-              con <code className="font-mono text-xs">source.type: mysql</code> e le credenziali via variabili d'ambiente.
-            </p>
-            <p className="mt-2">
-              Consulta la documentazione in <code className="font-mono text-xs">CLAUDE.md</code> per la struttura completa del config.
-            </p>
-          </div>
+          <MySQLWizard
+            onDone={(collection) => setMode({ kind: 'view', collection })}
+            onCancel={() => setMode({ kind: 'idle' })}
+          />
         )}
         {mode.kind === 'view' && (
           <Tabs defaultValue="config">
