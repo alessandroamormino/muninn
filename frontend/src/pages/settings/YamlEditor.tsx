@@ -67,21 +67,19 @@ export default function YamlEditor({ collection }: { collection: string }) {
 
   const isDirty = yamlContent !== savedYaml
 
-  // Initialize both states when data arrives — prevents false dirty on first render (Pitfall 5)
+  // Single effect for both init and collection change.
+  // Two separate effects caused a mount-order bug: the collection-change effect fired
+  // after the data effect, overwriting cached YAML with '' on every tab switch.
   useEffect(() => {
     if (configData?.yaml !== undefined) {
       setYamlContent(configData.yaml)
       setSavedYaml(configData.yaml)
       setServerError(null)
+    } else {
+      setYamlContent('')
+      setSavedYaml('')
     }
-  }, [configData?.yaml])
-
-  // Reset on collection change to avoid showing stale content during loading
-  useEffect(() => {
-    setYamlContent('')
-    setSavedYaml('')
-    setServerError(null)
-  }, [collection])
+  }, [collection, configData?.yaml])
 
   const parsedFields = useMemo(
     () => extractTextAndMetadataFields(yamlContent),
@@ -101,9 +99,16 @@ export default function YamlEditor({ collection }: { collection: string }) {
     }
   }
 
-  const handleReload = () => {
+  const handleReload = async () => {
     if (isDirty && !window.confirm('Hai modifiche non salvate. Ricaricare dal disco?')) return
-    refetch()
+    // Await refetch and explicitly reset state — without this, if the server returns the same
+    // YAML string the cache already holds, configData.yaml doesn't change, the effect dep
+    // doesn't fire, and the dirty content stays visible.
+    const result = await refetch()
+    const freshYaml = result.data?.yaml ?? configData?.yaml ?? ''
+    setYamlContent(freshYaml)
+    setSavedYaml(freshYaml)
+    setServerError(null)
   }
 
   const handleSuggestResult = (suggested: SuggestFieldsResponse['suggested_config']) => {
