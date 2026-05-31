@@ -54,6 +54,10 @@ class SuggestConfigRequest(BaseModel):
     file_path: str
 
 
+class SuggestFromFieldsRequest(BaseModel):
+    fields: list[str]
+
+
 def _collection_from_filename(file_path: str) -> str:
     """Derive PascalCase collection name from CSV filename (D-07).
 
@@ -220,3 +224,55 @@ def suggest_config(body: SuggestConfigRequest, _: UserRecord = Depends(require_a
     if "_warning" in llm_result:
         response["_warning"] = llm_result["_warning"]
     return response
+
+
+@router.post("/setup/suggest-config-from-fields")
+def suggest_config_from_fields(
+    body: SuggestFromFieldsRequest,
+    _: UserRecord = Depends(require_admin),
+) -> dict:
+    """Suggest config from a list of field names (no CSV file required).
+
+    Accepts a list of DB column names (e.g. from MySQL schema) and runs the same
+    LLM classification prompt as suggest_config, using synthetic placeholder rows.
+    Useful for the MySQL creation wizard where no CSV file is available.
+
+    T-14.1-07: _sanitize_cell applied to every field name to prevent prompt injection.
+    """
+    if not body.fields:
+        raise HTTPException(status_code=422, detail="fields list is empty")
+
+    # T-14.1-07: apply prompt injection hardening to each field name
+    headers = [_sanitize_cell(f) for f in body.fields]
+    # Build a synthetic single row with placeholder values
+    rows = [{h: f"<{h}>" for h in headers}]
+    prompt = _build_prompt(headers, rows)
+
+    llm = OllamaLLMClient(settings.embedding)
+    try:
+        llm_result = llm.generate(prompt)
+    except LLMError as exc:
+        logger.warning("LLM call failed in suggest_config_from_fields: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="LLM unavailable — make sure Ollama is running",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("suggest_config_from_fields failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="LLM unavailable — make sure Ollama is running",
+        )
+
+    # Do NOT call _validate_suggested_fields — fields come from DB schema, not CSV headers
+    # so LLM suggestions may differ from the exact field names passed in
+    suggested_config = {
+        "id_field": llm_result.get("id_field", ""),
+        "text_fields": llm_result.get("text_fields", []),
+        "metadata_fields": llm_result.get("metadata_fields", []),
+        "output_fields": llm_result.get("output_fields", []),
+    }
+    return {
+        "suggested_config": suggested_config,
+        "reasoning": llm_result.get("reasoning", {}),
+    }
