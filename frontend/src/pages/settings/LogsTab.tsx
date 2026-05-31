@@ -1,6 +1,6 @@
 import { useLogs } from '@/api/logs'
 import LogsTable from '@/pages/logs/LogsTable'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 
 export default function LogsTab({ collection }: { collection: string }) {
   const { data: logs, isLoading } = useLogs(collection, 10)
