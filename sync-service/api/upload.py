@@ -155,14 +155,15 @@ def _write_config(
     return config_path
 
 
-def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "") -> None:
-    """Background task for upload-triggered full sync.
+def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "", mode: str = "full") -> None:
+    """Background task for upload-triggered sync (full or incremental).
 
     IMPORTANT differences from _run_sync_bg:
     - Uses load_config(config_path) — NOT the global settings singleton (D-04)
     - Creates a fresh SyncEngine — does NOT touch app_state.sync_engine (D-03)
     - Uses per-entity StateStore path — NOT the default /app/.sync/sync_state.json (A3)
-    - Always calls run_full() — D-06
+    - mode="full": calls engine.run_full() (drop+recreate collection, full re-index)
+    - mode="incremental": calls engine.run_incremental() (hash-diff only, no drop)
     - LogStore.record() uses temp_cfg fields, not settings.* — avoids Pitfall 5
     - Releases sync_lock in finally — mirrors sync.py line 96
     - collection_hint: best-effort fallback for error-path logging (WR-02)
@@ -204,7 +205,10 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "")
         if app_state.upload_status:
             app_state.upload_status["status"] = "syncing"
 
-        result = engine.run_full(on_progress=_on_progress)        # always full — D-06
+        if mode == "full":
+            result = engine.run_full(on_progress=_on_progress)    # D-06
+        else:
+            result = engine.run_incremental()
 
         app_state.sync_status = {"status": "completed", "last_run": {**result}}
         if app_state.upload_status:
@@ -218,7 +222,7 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "")
             _log_store.record(
                 started_at=_started_at,
                 finished_at=_dt.datetime.now(tz=_dt.timezone.utc).isoformat(),
-                type="full",                              # D-07
+                type=mode,                                # D-07: log actual mode
                 status="completed",
                 took_ms=took_ms,
                 model=temp_cfg.embedding.model,           # temp_cfg, NOT settings — Pitfall 5
@@ -248,7 +252,7 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "")
             _log_store.record(
                 started_at=_started_at,
                 finished_at=_dt.datetime.now(tz=_dt.timezone.utc).isoformat(),
-                type="full",
+                type=mode,
                 status="failed",
                 took_ms=took_ms,
                 model="",
@@ -382,7 +386,7 @@ async def confirm_upload(
         request.app.state.upload_status["config_path"] = str(config_path)
         request.app.state.sync_status = request.app.state.sync_status or {}
         request.app.state.sync_status["status"] = "running"
-        background_tasks.add_task(_run_upload_sync_bg, request.app.state, config_path, body.collection)
+        background_tasks.add_task(_run_upload_sync_bg, request.app.state, config_path, body.collection, "full")
         lock_acquired = False  # background task now owns the lock release
     except Exception:
         if lock_acquired:
@@ -459,7 +463,39 @@ async def trigger_full_sync_by_collection(
         request.app.state.upload_status["status"] = "syncing"
         request.app.state.sync_status = request.app.state.sync_status or {}
         request.app.state.sync_status["status"] = "running"
-        background_tasks.add_task(_run_upload_sync_bg, request.app.state, config_path, collection)
+        background_tasks.add_task(_run_upload_sync_bg, request.app.state, config_path, collection, "full")
+        lock_acquired = False  # background task now owns the lock release
+    except Exception:
+        if lock_acquired:
+            request.app.state.sync_lock.release()
+        raise
+    return {"status": "started", "collection": collection}
+
+
+@router.post("/sync/by-collection")
+async def trigger_incremental_sync_by_collection(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    collection: Annotated[str, Query(min_length=1)],
+    _: UserRecord = Depends(require_admin),
+) -> dict:
+    """Trigger an INCREMENTAL sync for a specific collection. T-14.1-08: validates collection name."""
+    if not _COLLECTION_RE.match(collection):
+        raise HTTPException(status_code=422, detail="Invalid collection name")
+    config_path = _CONFIG_ROOT / collection / "config.yaml"
+    if not config_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No config found for collection '{collection}'",
+        )
+    lock_acquired = False
+    try:
+        if not request.app.state.sync_lock.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail="Sync already in progress")
+        lock_acquired = True
+        request.app.state.sync_status = request.app.state.sync_status or {}
+        request.app.state.sync_status["status"] = "running"
+        background_tasks.add_task(_run_upload_sync_bg, request.app.state, config_path, collection, "incremental")
         lock_acquired = False  # background task now owns the lock release
     except Exception:
         if lock_acquired:

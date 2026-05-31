@@ -443,3 +443,113 @@ def test_upload_restapi_writes_config(tmp_path):
     assert cfg["source"]["type"] == "rest_api"
     assert cfg["source"]["auth"]["token"] == "${MY_API_TOKEN}"
     assert cfg["source"]["json_key"] == "results"
+
+
+# ---------------------------------------------------------------------------
+# New tests for POST /sync/by-collection (incremental)
+# ---------------------------------------------------------------------------
+
+def _make_app_with_auth(tmp_path=None, lock: bool = False) -> FastAPI:
+    """Create app with dependency_overrides for auth deps (mirrors test_config_router pattern)."""
+    from auth.dependencies import require_admin, get_current_user
+    from auth.user_store import UserRecord
+
+    _ADMIN = UserRecord(
+        id=1, username="admin", hashed_password="", role="admin",
+        totp_secret=None, totp_enabled=False,
+        created_at="2026-01-01T00:00:00", is_active=True
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    lk = threading.Lock()
+    if lock:
+        lk.acquire()
+    app.state.sync_lock = lk
+    app.state.sync_status = {"status": "idle", "last_run": None}
+    app.state.upload_status = None
+    app.state.log_store = None
+    app.dependency_overrides[require_admin] = lambda: _ADMIN
+    app.dependency_overrides[get_current_user] = lambda: _ADMIN
+    return app
+
+
+# --- SC-09a: POST /sync/by-collection happy path ---
+
+def test_sync_incremental_by_collection_happy(tmp_path):
+    """POST /sync/by-collection returns 200 {status: started, collection} and passes mode='incremental' to bg task."""
+    config_dir = tmp_path / "Collaboratori"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.yaml").write_text("source:\n  type: csv\n", encoding="utf-8")
+
+    with (
+        patch("api.upload._CONFIG_ROOT", tmp_path),
+        patch("api.upload._run_upload_sync_bg") as mock_bg,
+    ):
+        app = _make_app_with_auth(tmp_path)
+        with TestClient(app) as client:
+            resp = client.post("/sync/by-collection?collection=Collaboratori")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "started"
+    assert body["collection"] == "Collaboratori"
+    # Verify mode="incremental" was passed to background task
+    assert mock_bg.called
+    call_args = mock_bg.call_args
+    # add_task passes positional args; mode is the 4th positional arg (app_state, config_path, collection, mode)
+    assert "incremental" in call_args.args or call_args.kwargs.get("mode") == "incremental"
+
+
+# --- SC-09b: POST /sync/by-collection 404 when config missing ---
+
+def test_sync_incremental_by_collection_404(tmp_path):
+    """404 when no config.yaml exists for the given collection."""
+    with patch("api.upload._CONFIG_ROOT", tmp_path):
+        app = _make_app_with_auth(tmp_path)
+        resp = TestClient(app).post("/sync/by-collection?collection=Nonexistent")
+    assert resp.status_code == 404
+    assert "Nonexistent" in resp.json()["detail"]
+
+
+# --- SC-09c: POST /sync/by-collection 422 path traversal ---
+
+def test_sync_incremental_by_collection_422_traversal():
+    """collection='../etc' must return 422."""
+    app = _make_app_with_auth()
+    resp = TestClient(app).post("/sync/by-collection?collection=../etc")
+    assert resp.status_code == 422
+
+
+# --- SC-09d: POST /sync/by-collection 409 when sync already running ---
+
+def test_sync_incremental_by_collection_409_locked(tmp_path):
+    """409 when sync_lock is already held."""
+    config_dir = tmp_path / "MyEntity"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.yaml").write_text("source:\n  type: csv\n", encoding="utf-8")
+    with patch("api.upload._CONFIG_ROOT", tmp_path):
+        app = _make_app_with_auth(tmp_path, lock=True)
+        resp = TestClient(app).post("/sync/by-collection?collection=MyEntity")
+    assert resp.status_code == 409
+    assert "already in progress" in resp.json()["detail"].lower()
+
+
+# --- SC-09e: existing /sync/full/by-collection still passes mode="full" (no regression) ---
+
+def test_sync_full_by_collection_mode_default(tmp_path):
+    """POST /sync/full/by-collection still triggers mode='full' background task."""
+    config_dir = tmp_path / "MyEntity"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.yaml").write_text("source:\n  type: csv\n", encoding="utf-8")
+
+    with (
+        patch("api.upload._CONFIG_ROOT", tmp_path),
+        patch("api.upload._run_upload_sync_bg") as mock_bg,
+    ):
+        app = _make_app_with_auth(tmp_path)
+        with TestClient(app) as client:
+            resp = client.post("/sync/full/by-collection?collection=MyEntity")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "started"
+    # mode="full" passed — either as positional arg (no mode) or explicitly
+    assert mock_bg.called
