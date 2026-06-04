@@ -134,6 +134,18 @@ class EmbeddingConfig(BaseModel):
     endpoint: str | None = Field(default=None)  # used by ollama adapter
 
 
+class FtsConfig(BaseModel):
+    """Full-text search configuration per entity (Phase 15 — Qdrant fts mode).
+
+    language: stemmer language for Qdrant TextIndexParams (Snowball).
+    Accepted values: en, it, de, fr, es, pt, nl, ru, sv, fi, da, no, hu,
+                     ro, tr, ar, armenian, basque, catalan, ga, gl, hi, hy (and more).
+    Default: "en" — Qdrant default.
+    """
+    model_config = ConfigDict(extra="ignore")
+    language: str = "en"
+
+
 class WeaviateConfig(BaseModel):
     collection: str = "Products"
     text_fields: list[str] = Field(default_factory=list)
@@ -147,6 +159,12 @@ class WeaviateConfig(BaseModel):
     # HNSW tuning -- optional. All None = use Weaviate server defaults (ef=64, max_connections=64).
     # ef is mutable post-creation; max_connections requires full re-index to change.
     hnsw: HnswConfig = Field(default_factory=HnswConfig)
+    # Search mode (Phase 15 — per entity). Weaviate supports: hybrid, vector, bm25.
+    # Qdrant additionally supports: fts. Default: "hybrid" (richest behavior, backward compat).
+    # Incompatible combinations rejected at startup with RuntimeError (D-04).
+    search_mode: Literal["hybrid", "vector", "bm25", "fts"] = "hybrid"
+    # FTS language config (Phase 15 — Qdrant fts mode only; ignored for Weaviate).
+    fts: FtsConfig = Field(default_factory=FtsConfig)
 
 
 class SyncConfig(BaseModel):
@@ -176,9 +194,12 @@ class AppConfig(BaseModel):
     api: ApiConfig = Field(default_factory=ApiConfig)
     graph: GraphConfig = Field(default_factory=GraphConfig)
 
-    # Weaviate URL comes from environment, not config.yaml
+    # Vector store URL — VECTOR_STORE_URL takes precedence (Phase 15 D-02).
+    # Falls back to legacy WEAVIATE_URL for backward compatibility.
     weaviate_url: str = Field(
-        default_factory=lambda: os.getenv("WEAVIATE_URL", "http://localhost:8080")
+        default_factory=lambda: os.getenv(
+            "VECTOR_STORE_URL", os.getenv("WEAVIATE_URL", "http://localhost:8080")
+        )
     )
 
 
