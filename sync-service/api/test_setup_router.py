@@ -23,8 +23,17 @@ from llm.ollama_llm import LLMError
 
 
 def _make_app() -> FastAPI:
+    from auth.dependencies import require_admin, get_current_user
+    from auth.user_store import UserRecord
+    _ADMIN = UserRecord(
+        id=1, username="admin", hashed_password="", role="admin",
+        totp_secret=None, totp_enabled=False,
+        created_at="2026-01-01T00:00:00", is_active=True,
+    )
     app = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[require_admin] = lambda: _ADMIN
+    app.dependency_overrides[get_current_user] = lambda: _ADMIN
     return app
 
 

@@ -9,7 +9,6 @@ Tests cover:
 """
 from __future__ import annotations
 
-import uuid
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -18,19 +17,26 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
-def _make_fake_obj(idx: int, dims: int = 8) -> MagicMock:
-    obj = MagicMock()
-    obj.uuid = uuid.uuid4()
-    obj.vector = {"default": np.random.rand(dims).astype(np.float32).tolist()}
-    obj.properties = {"title": f"rec-{idx}"}
-    return obj
+def _make_raw_point(idx: int, dims: int = 8) -> dict:
+    return {
+        "vector": np.random.rand(dims).astype(np.float32).tolist(),
+        "payload": {"id": str(idx), "title": f"rec-{idx}"},
+    }
 
 
 def _make_test_app():
     from api import graph as graph_mod
+    from auth.dependencies import get_current_user
+    from auth.user_store import UserRecord
 
+    _ADMIN = UserRecord(
+        id=1, username="admin", hashed_password="", role="admin",
+        totp_secret=None, totp_enabled=False,
+        created_at="2026-01-01T00:00:00", is_active=True,
+    )
     app = FastAPI()
     app.include_router(graph_mod.router)
+    app.dependency_overrides[get_current_user] = lambda: _ADMIN
     return app
 
 
@@ -56,7 +62,8 @@ def test_collections_returns_list(tmp_path, monkeypatch):
     assert r.status_code == 200
     data = r.json()
     assert "collections" in data
-    assert data["collections"] == ["Collaboratori", "Movies"]
+    names = [c["name"] if isinstance(c, dict) else c for c in data["collections"]]
+    assert names == ["Collaboratori", "Movies"]
 
 
 # ---------------------------------------------------------------------------
@@ -72,13 +79,11 @@ def test_graph_returns_structure(tmp_path, monkeypatch):
     monkeypatch.setattr(graph_mod, "_CONFIG_ROOT", tmp_path)
 
     n_records = 50
-    fake_objs = [_make_fake_obj(i) for i in range(n_records)]
+    fake_points = [_make_raw_point(i) for i in range(n_records)]
 
-    # Mock Weaviate client
-    mock_col = MagicMock()
-    mock_col.iterator.return_value = iter(fake_objs)
-    mock_client = MagicMock()
-    mock_client.collections.get.return_value = mock_col
+    # Mock vector store
+    mock_vs = MagicMock()
+    mock_vs.get_vectors_for_graph.return_value = fake_points
 
     # Mock UMAP
     mock_umap_instance = MagicMock()
@@ -101,13 +106,13 @@ def test_graph_returns_structure(tmp_path, monkeypatch):
     mock_llm_class = MagicMock(return_value=mock_llm_instance)
 
     with (
-        patch.object(graph_mod, "get_client", return_value=mock_client),
         patch.object(graph_mod, "umap") as mock_umap_module,
         patch.object(graph_mod, "HDBSCAN", mock_hdbscan_class),
         patch.object(graph_mod, "OllamaLLMClient", mock_llm_class),
     ):
         mock_umap_module.UMAP = mock_umap_class
         app = _make_test_app()
+        app.state.vector_store = mock_vs
         client = TestClient(app)
 
         r = client.get("/graph/Collaboratori")
@@ -137,16 +142,14 @@ def test_graph_empty_collection(tmp_path, monkeypatch):
     monkeypatch.setattr(graph_mod, "_CONFIG_ROOT", tmp_path)
 
     # Return only 5 objects — below minimum of 10
-    fake_objs = [_make_fake_obj(i) for i in range(5)]
-    mock_col = MagicMock()
-    mock_col.iterator.return_value = iter(fake_objs)
-    mock_client = MagicMock()
-    mock_client.collections.get.return_value = mock_col
+    fake_points = [_make_raw_point(i) for i in range(5)]
+    mock_vs = MagicMock()
+    mock_vs.get_vectors_for_graph.return_value = fake_points
 
-    with patch.object(graph_mod, "get_client", return_value=mock_client):
-        app = _make_test_app()
-        client = TestClient(app)
-        r = client.get("/graph/Collaboratori")
+    app = _make_test_app()
+    app.state.vector_store = mock_vs
+    client = TestClient(app)
+    r = client.get("/graph/Collaboratori")
 
     assert r.status_code == 422
     detail = r.json().get("detail", "")

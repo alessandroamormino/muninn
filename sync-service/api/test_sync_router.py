@@ -12,7 +12,8 @@ Verifica:
 from __future__ import annotations
 
 import threading
-from unittest.mock import MagicMock
+from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -30,7 +31,14 @@ def _make_lock(locked: bool = False) -> threading.Lock:
 
 
 def _make_app(engine=None, lock=False):
-    """Crea una FastAPI minimale con il router sync."""
+    """Crea una FastAPI minimale con il router sync e auth bypass."""
+    from auth.dependencies import require_admin, get_current_user
+    from auth.user_store import UserRecord
+    _ADMIN = UserRecord(
+        id=1, username="admin", hashed_password="", role="admin",
+        totp_secret=None, totp_enabled=False,
+        created_at="2026-01-01T00:00:00", is_active=True,
+    )
     app = FastAPI()
     app.include_router(router)
     app.state.sync_lock = _make_lock(locked=lock)
@@ -54,7 +62,17 @@ def _make_app(engine=None, lock=False):
             "timestamp": "2026-05-10T00:00:00+00:00",
         }
     app.state.sync_engine = engine
+    app.state.vector_store = MagicMock()
+    app.dependency_overrides[require_admin] = lambda: _ADMIN
+    app.dependency_overrides[get_current_user] = lambda: _ADMIN
     return app
+
+
+@contextmanager
+def _patched_sync(engine):
+    """Patch load_config and SyncEngine so _run_sync_bg uses the test engine directly."""
+    with patch("api.sync.load_config"), patch("api.sync.SyncEngine", return_value=engine):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -91,8 +109,9 @@ def test_post_sync_background_sets_completed():
     TestClient esegue i BackgroundTasks in modo sincrono al termine della request.
     """
     app = _make_app()
-    client = TestClient(app)
-    client.post("/sync")
+    with _patched_sync(app.state.sync_engine):
+        client = TestClient(app)
+        client.post("/sync")
     status_resp = client.get("/sync/status")
     data = status_resp.json()
     assert data["status"] == "completed", f"status atteso completed, got: {data}"
@@ -102,8 +121,9 @@ def test_post_sync_background_sets_completed():
 def test_post_sync_lock_released_after_success():
     """Il lock deve essere rilasciato dopo il completamento con successo."""
     app = _make_app()
-    client = TestClient(app)
-    client.post("/sync")
+    with _patched_sync(app.state.sync_engine):
+        client = TestClient(app)
+        client.post("/sync")
     assert not app.state.sync_lock.locked()
 
 
@@ -132,8 +152,9 @@ def test_post_sync_full_returns_started():
 def test_post_sync_full_background_sets_completed():
     """Dopo il background task full, status diventa completed."""
     app = _make_app()
-    client = TestClient(app)
-    client.post("/sync/full")
+    with _patched_sync(app.state.sync_engine):
+        client = TestClient(app)
+        client.post("/sync/full")
     data = client.get("/sync/status").json()
     assert data["status"] == "completed"
     assert data["last_run"] is not None
@@ -142,8 +163,9 @@ def test_post_sync_full_background_sets_completed():
 def test_post_sync_full_lock_released_after_success():
     """Il lock deve essere rilasciato dopo il completamento full."""
     app = _make_app()
-    client = TestClient(app)
-    client.post("/sync/full")
+    with _patched_sync(app.state.sync_engine):
+        client = TestClient(app)
+        client.post("/sync/full")
     assert not app.state.sync_lock.locked()
 
 
@@ -164,8 +186,9 @@ def test_sync_background_task_failure_sets_failed():
     engine = MagicMock()
     engine.run_incremental.side_effect = RuntimeError("connessione rotta")
     app = _make_app(engine=engine)
-    client = TestClient(app)
-    client.post("/sync")
+    with _patched_sync(engine):
+        client = TestClient(app)
+        client.post("/sync")
     data = client.get("/sync/status").json()
     assert data["status"] == "failed"
     assert data["last_run"] is not None
@@ -178,8 +201,9 @@ def test_sync_lock_released_after_failure():
     engine = MagicMock()
     engine.run_incremental.side_effect = RuntimeError("errore test")
     app = _make_app(engine=engine)
-    client = TestClient(app)
-    client.post("/sync")
+    with _patched_sync(engine):
+        client = TestClient(app)
+        client.post("/sync")
     assert not app.state.sync_lock.locked()
 
 
@@ -188,8 +212,9 @@ def test_sync_full_background_task_failure_sets_failed():
     engine = MagicMock()
     engine.run_full.side_effect = ValueError("collezione non esiste")
     app = _make_app(engine=engine)
-    client = TestClient(app)
-    client.post("/sync/full")
+    with _patched_sync(engine):
+        client = TestClient(app)
+        client.post("/sync/full")
     data = client.get("/sync/status").json()
     assert data["status"] == "failed"
     assert "error" in data["last_run"]
@@ -202,8 +227,9 @@ def test_sync_full_background_task_failure_sets_failed():
 def test_sync_status_last_run_includes_took_ms():
     """After POST /sync, GET /sync/status last_run has took_ms as int >= 0."""
     app = _make_app()
-    client = TestClient(app)
-    client.post("/sync")
+    with _patched_sync(app.state.sync_engine):
+        client = TestClient(app)
+        client.post("/sync")
     data = client.get("/sync/status").json()
     assert data["status"] == "completed"
     assert "took_ms" in data["last_run"], f"took_ms missing from last_run: {data['last_run']}"
@@ -214,8 +240,9 @@ def test_sync_status_last_run_includes_took_ms():
 def test_sync_full_status_last_run_includes_took_ms():
     """After POST /sync/full, GET /sync/status last_run has took_ms as int >= 0."""
     app = _make_app()
-    client = TestClient(app)
-    client.post("/sync/full")
+    with _patched_sync(app.state.sync_engine):
+        client = TestClient(app)
+        client.post("/sync/full")
     data = client.get("/sync/status").json()
     assert data["status"] == "completed"
     assert "took_ms" in data["last_run"]
@@ -228,8 +255,9 @@ def test_sync_failed_status_last_run_includes_took_ms():
     engine = MagicMock()
     engine.run_incremental.side_effect = RuntimeError("connessione rotta")
     app = _make_app(engine=engine)
-    client = TestClient(app)
-    client.post("/sync")
+    with _patched_sync(engine):
+        client = TestClient(app)
+        client.post("/sync")
     data = client.get("/sync/status").json()
     assert data["status"] == "failed"
     assert "took_ms" in data["last_run"], f"took_ms missing from failed last_run: {data['last_run']}"

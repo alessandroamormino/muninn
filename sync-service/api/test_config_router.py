@@ -48,7 +48,7 @@ def test_get_config_happy(tmp_path):
     yaml_content = "source:\n  type: csv\n  file_path: ./data/test.csv\n"
     (config_dir / "config.yaml").write_text(yaml_content, encoding="utf-8")
 
-    with patch("api.config._CONFIG_ROOT", tmp_path / "configuration"):
+    with patch("api.upload._CONFIG_ROOT", tmp_path / "configuration"):
         resp = TestClient(_make_app_with_auth()).get("/config/Collaboratori")
 
     assert resp.status_code == 200
@@ -106,7 +106,7 @@ def test_put_config_valid(tmp_path):
         "    \"on\": \"users.id = roles.user_id\"\n"
     )
 
-    with patch("api.config._CONFIG_ROOT", tmp_path / "configuration"):
+    with patch("api.upload._CONFIG_ROOT", tmp_path / "configuration"):
         resp = TestClient(_make_app_with_auth()).put(
             "/config/Collaboratori",
             json={"yaml": new_yaml},
