@@ -10,6 +10,8 @@ export interface InfoResponse {
   sync_mode: string
   sync_schedule: string
   total_objects: number | null
+  vector_store_engine: string
+  search_mode: string
 }
 
 export function useInfo() {
