@@ -45,6 +45,7 @@ from sync.engine import SyncEngine
 from sync.state_store import StateStore
 from vector_stores import get_vector_store
 from vector_stores.base import validate_search_mode_compatibility
+from vector_stores.search_mode_state import detect_search_mode_change
 from weaviate_store.model_version import check_and_handle_model_change
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,16 @@ async def lifespan(app: FastAPI):
 
     vector_store.open()
     logger.info("Creating collection if missing...")
+    # D-09: detect search_mode change — drop index before re-creating when mode changed.
+    # detect_search_mode_change returns False on first run (no file) and when mode unchanged.
+    _collection_name = settings.weaviate.collection
+    _current_mode = getattr(settings.weaviate, "search_mode", "hybrid")
+    if detect_search_mode_change(_collection_name, _current_mode):
+        logger.warning(
+            "search_mode changed for %r — dropping existing index for full re-index (D-09).",
+            _collection_name,
+        )
+        vector_store.drop_index(_collection_name)
     created = vector_store.create_index(settings)
     if created:
         logger.info("Collection %r created.", settings.weaviate.collection)
