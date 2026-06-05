@@ -70,8 +70,10 @@ services:
     depends_on:
       vector-db:
         condition: service_healthy
+        required: false
       vector-db-qdrant:
         condition: service_healthy
+        required: false
     restart: unless-stopped
 
   frontend:
