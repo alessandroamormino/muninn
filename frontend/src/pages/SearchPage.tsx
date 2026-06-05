@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import EntityDropdown from '@/components/EntityDropdown'
 import SearchBar from './search/SearchBar'
 import FilterBar from './search/FilterBar'
 import ResultCard from './search/ResultCard'
+import SearchModeSelector from './search/SearchModeSelector'
 import { useSearch } from '@/api/search'
+import { useEntityInfo } from '@/api/config'
 import { Skeleton } from '@/components/ui/skeleton'
 
 export default function SearchPage() {
@@ -11,12 +13,20 @@ export default function SearchPage() {
   const [q, setQ] = useState<string>('')
   const [filter, setFilter] = useState<string>('')
   const [minScore, setMinScore] = useState<number | null>(null)
+  const [searchMode, setSearchMode] = useState<string>('hybrid')
+
+  const { data: entityInfo } = useEntityInfo(collection)
+
+  useEffect(() => {
+    setSearchMode(entityInfo?.search_mode ?? 'hybrid')
+  }, [collection, entityInfo?.search_mode])
 
   const search = useSearch({
     q,
     collection,
     filter: filter || null,
     min_score: minScore,
+    search_mode: entityInfo?.vector_store_engine === 'qdrant' ? searchMode : undefined,
   })
 
   const errMsg = (() => {
@@ -45,6 +55,14 @@ export default function SearchPage() {
         minScore={minScore}
         onChange={({ filter: f, minScore: m }) => { setFilter(f); setMinScore(m) }}
       />
+
+      {collection && entityInfo?.vector_store_engine === 'qdrant' && (
+        <SearchModeSelector
+          value={searchMode}
+          onChange={setSearchMode}
+          disabled={search.isPending}
+        />
+      )}
 
       {!q && (
         <div className="text-sm text-muted-foreground py-8 text-center">

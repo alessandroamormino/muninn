@@ -4,10 +4,13 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import GraphCanvas from './graph/GraphCanvas'
 import { useGraph } from '@/api/graph'
+import { useEntityInfo } from '@/api/config'
 
 export default function GraphPage() {
   const [collection, setCollection] = useState<string | null>(null)
-  const graph = useGraph(collection)
+  const { data: graphInfo } = useEntityInfo(collection)
+  const isFtsMode = collection != null && graphInfo?.search_mode === 'fts'
+  const graph = useGraph(isFtsMode ? null : collection)
   const resetZoomRef = useRef<(() => void) | null>(null)
 
   const isTooFew = (() => {
@@ -38,7 +41,7 @@ export default function GraphPage() {
         <EntityDropdown value={collection} onChange={setCollection} />
         <Button
           onClick={() => graph.refetch()}
-          disabled={!collection || graph.isFetching}
+          disabled={!collection || graph.isFetching || isFtsMode}
         >
           {graph.isFetching ? 'Computing...' : 'Load Graph'}
         </Button>
@@ -48,6 +51,17 @@ export default function GraphPage() {
         {!collection && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
             Select an entity, then click Load Graph.
+          </div>
+        )}
+
+        {collection && isFtsMode && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-6">
+            <h3 className="text-base font-semibold mb-1">Knowledge Graph non disponibile</h3>
+            <p className="text-sm text-muted-foreground max-w-sm">
+              Il Knowledge Graph richiede vettori semantici per calcolare la proiezione UMAP.
+              Con <code className="font-mono text-xs bg-muted px-1 rounded">search_mode: fts</code> non vengono
+              calcolati vettori. Cambia modalità a <strong>hybrid</strong> o <strong>vector</strong> per abilitare il grafo.
+            </p>
           </div>
         )}
 

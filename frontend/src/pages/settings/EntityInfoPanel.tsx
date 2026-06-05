@@ -1,5 +1,6 @@
 import { useEntityInfo } from '@/api/config'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EngineBadge } from '@/components/EngineBadge'
 
 export default function EntityInfoPanel({ collection }: { collection: string }) {
   const { data: info, isLoading, isError } = useEntityInfo(collection)
@@ -36,6 +37,14 @@ export default function EntityInfoPanel({ collection }: { collection: string }) 
         <div>
           <dt className="text-muted-foreground text-xs">Source type</dt>
           <dd className="text-sm font-semibold">{info?.sync_mode ?? '—'}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">Motore</dt>
+          <dd className="text-sm font-semibold"><EngineBadge engine={info?.vector_store_engine ?? 'weaviate'} /></dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">Modalità ricerca</dt>
+          <dd className="text-sm font-semibold">{info?.search_mode ?? '—'}</dd>
         </div>
       </dl>
     </div>
