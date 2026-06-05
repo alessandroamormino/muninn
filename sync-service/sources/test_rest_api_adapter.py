@@ -11,7 +11,7 @@ from config.settings import (
     PaginationConfig,
     SourceConfig,
     SyncConfig,
-    WeaviateConfig,
+    VectorStoreConfig,
 )
 from sources.rest_api_adapter import RestAPIAdapter
 from sources.json_adapter import AdapterError
@@ -40,7 +40,7 @@ def _cfgs(**source_overrides):
     defaults.update(source_overrides)
     src = SourceConfig(**defaults)
     syn = SyncConfig(hash_fields=["id", "name"])
-    wea = WeaviateConfig()
+    wea = VectorStoreConfig()
     return src, syn, wea
 
 
@@ -60,7 +60,7 @@ class TestAdapterInterface:
             RestAPIAdapter(
                 SourceConfig(type="rest_api", url=None),
                 SyncConfig(),
-                WeaviateConfig(),
+                VectorStoreConfig(),
             )
 
 

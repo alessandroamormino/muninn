@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from config.settings import AppConfig, SourceConfig, SyncConfig, WeaviateConfig, EmbeddingConfig
+from config.settings import AppConfig, SourceConfig, SyncConfig, VectorStoreConfig, EmbeddingConfig
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ class _UpsertResult:
 def _make_app_cfg(csv_path: str) -> AppConfig:
     src = SourceConfig(type="csv", file_path=csv_path, id_field="id")
     syn = SyncConfig(hash_fields=["id", "name", "description"])
-    wea = WeaviateConfig(
+    wea = VectorStoreConfig(
         collection="TestCol",
         text_fields=["name", "description"],
         metadata_fields=["id"],
@@ -261,7 +261,7 @@ class TestQuantizationWarning:
         from sync.engine import SyncEngine
         src = SourceConfig(type="csv", file_path=csv_file, id_field="id")
         syn = SyncConfig(hash_fields=["id"])
-        wea = WeaviateConfig(
+        wea = VectorStoreConfig(
             collection="TestCol",
             text_fields=["name"],
             metadata_fields=["id"],
@@ -318,7 +318,7 @@ class TestSyncEngineIdField:
         )
         src = SourceConfig(type="mysql", id_field=source_id_field, mysql=mysql)
         syn = SyncConfig(hash_fields=["myid"])
-        wea = WeaviateConfig(collection="T", text_fields=["name"], metadata_fields=["myid"])
+        wea = VectorStoreConfig(collection="T", text_fields=["name"], metadata_fields=["myid"])
         emb = EmbeddingConfig(type="weaviate_builtin", model="text2vec-transformers")
         return AppConfig(source=src, sync=syn, weaviate=wea, embedding=emb)
 

@@ -33,7 +33,7 @@ from config.settings import (
     MySQLQueryConfig,
     SourceConfig,
     SyncConfig,
-    WeaviateConfig,
+    VectorStoreConfig,
 )
 from sources import build_source_adapter
 from sources.mysql_adapter import MySQLAdapter
@@ -192,7 +192,7 @@ def mysql_adapter(seeded_engine, monkeypatch):
     sync_cfg = SyncConfig(
         hash_fields=["id", "nome", "cognome", "ruolo", "bio"]
     )
-    weaviate_cfg = WeaviateConfig(
+    weaviate_cfg = VectorStoreConfig(
         text_fields=["bio"],
         metadata_fields=["nome", "cognome", "ruolo"],
     )
@@ -363,7 +363,7 @@ def test_factory_dispatches_to_mysql_adapter_live(seeded_engine, monkeypatch):
         ),
     )
     sync_cfg = SyncConfig(hash_fields=["id", "nome"])
-    weaviate_cfg = WeaviateConfig()
+    weaviate_cfg = VectorStoreConfig()
 
     adapter = build_source_adapter(source_cfg, sync_cfg, weaviate_cfg)
     try:

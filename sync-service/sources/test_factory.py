@@ -3,13 +3,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from config.settings import MySQLConfig, MySQLQueryConfig, SourceConfig, SyncConfig, WeaviateConfig
+from config.settings import MySQLConfig, MySQLQueryConfig, SourceConfig, SyncConfig, VectorStoreConfig
 
 
 def _make_cfgs(source_type: str, file_path: str | None = None, **kwargs):
     src = SourceConfig(type=source_type, file_path=file_path, **kwargs)
     syn = SyncConfig()
-    wea = WeaviateConfig()
+    wea = VectorStoreConfig()
     return src, syn, wea
 
 
@@ -49,7 +49,7 @@ class TestBuildSourceAdapterDispatch:
         from sources import build_source_adapter
         src = SourceConfig(type="mysql")  # no mysql: block
         with pytest.raises(ValueError) as exc_info:
-            build_source_adapter(src, SyncConfig(), WeaviateConfig())
+            build_source_adapter(src, SyncConfig(), VectorStoreConfig())
         assert "mysql" in str(exc_info.value).lower()
 
     def test_postgresql_raises_not_implemented(self):
@@ -57,7 +57,7 @@ class TestBuildSourceAdapterDispatch:
         class FakeSrc:
             type = "postgresql"
         with pytest.raises(NotImplementedError) as exc_info:
-            build_source_adapter(FakeSrc(), SyncConfig(), WeaviateConfig())
+            build_source_adapter(FakeSrc(), SyncConfig(), VectorStoreConfig())
         assert "postgresql" in str(exc_info.value)
 
     def test_unknown_type_raises_not_implemented(self):
@@ -65,7 +65,7 @@ class TestBuildSourceAdapterDispatch:
         class FakeSrc:
             type = "unknown_db"
         with pytest.raises(NotImplementedError) as exc_info:
-            build_source_adapter(FakeSrc(), SyncConfig(), WeaviateConfig())
+            build_source_adapter(FakeSrc(), SyncConfig(), VectorStoreConfig())
         assert "unknown_db" in str(exc_info.value)
 
     def test_mysql_returns_mysql_adapter(self):
@@ -87,7 +87,7 @@ class TestBuildSourceAdapterDispatch:
         )
         src = SourceConfig(type="mysql", mysql=mysql_cfg)
         syn = SyncConfig()
-        wea = WeaviateConfig()
+        wea = VectorStoreConfig()
 
         mock_engine = MagicMock()
         with patch("sources.mysql_adapter.create_engine", return_value=mock_engine):

@@ -25,7 +25,7 @@ from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError, OperationalError
 
-from config.settings import MySQLConfig, MySQLJoinConfig, SourceConfig, SyncConfig, WeaviateConfig
+from config.settings import MySQLConfig, MySQLJoinConfig, SourceConfig, SyncConfig, VectorStoreConfig
 from sources.base import BaseSourceAdapter
 from sources.json_adapter import AdapterError, _resolve_env_vars
 
@@ -109,7 +109,7 @@ class MySQLAdapter(BaseSourceAdapter):
         self,
         source_cfg: SourceConfig,
         sync_cfg: SyncConfig,
-        weaviate_cfg: WeaviateConfig,
+        weaviate_cfg: VectorStoreConfig,
     ) -> None:
         if source_cfg.mysql is None:
             raise ValueError(

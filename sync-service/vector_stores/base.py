@@ -82,18 +82,18 @@ def validate_search_mode_compatibility(engine: str, configs: list) -> None:
 
     Args:
         engine: "weaviate" or "qdrant"
-        configs: list of AppConfig objects (or mocks with .weaviate.collection and
-                 .weaviate.search_mode attributes)
+        configs: list of AppConfig objects (or mocks with .vector_store.collection and
+                 .vector_store.search_mode attributes)
 
     Raises:
         RuntimeError: on first incompatible search_mode found.
     """
     allowed = WEAVIATE_MODES if engine == "weaviate" else QDRANT_MODES
     for cfg in configs:
-        mode = getattr(cfg.weaviate, "search_mode", "hybrid")
+        mode = getattr(cfg.vector_store, "search_mode", "hybrid")
         if mode not in allowed:
             raise RuntimeError(
-                f"Entity {cfg.weaviate.collection}: search_mode={mode!r} non supportata "
+                f"Entity {cfg.vector_store.collection}: search_mode={mode!r} non supportata "
                 f"da {engine}. Modi disponibili: {sorted(allowed)}"
             )
 

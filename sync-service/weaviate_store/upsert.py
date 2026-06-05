@@ -17,7 +17,7 @@ import uuid as _uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from config.settings import WeaviateConfig
+from config.settings import VectorStoreConfig
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def compute_record_uuid(source_type: str, record_id: str) -> _uuid.UUID:
     return _uuid.uuid5(_uuid.NAMESPACE_DNS, f"{source_type}:{record_id}")
 
 
-def _get_id_field(weaviate_cfg: WeaviateConfig) -> str:
+def _get_id_field(weaviate_cfg: VectorStoreConfig) -> str:
     """The id field name used to extract record_id from the dict.
 
     Convention: the id field is whichever element of metadata_fields named 'id' or
@@ -132,7 +132,7 @@ def _build_document(record: dict[str, Any], text_fields: list[str]) -> str:
 def upsert_records(
     client,
     records: list[dict[str, Any]],
-    weaviate_cfg: WeaviateConfig,
+    weaviate_cfg: VectorStoreConfig,
     source_type: str,
     embedding_adapter=None,
     id_field: str | None = None,

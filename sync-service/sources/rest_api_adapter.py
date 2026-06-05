@@ -10,7 +10,7 @@ import requests
 
 from sources.base import BaseSourceAdapter
 from sources.json_adapter import AdapterError, _resolve_env_vars
-from config.settings import SourceConfig, SyncConfig, WeaviateConfig
+from config.settings import SourceConfig, SyncConfig, VectorStoreConfig
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class RestAPIAdapter(BaseSourceAdapter):
         self,
         source_cfg: SourceConfig,
         sync_cfg: SyncConfig,
-        weaviate_cfg: WeaviateConfig,
+        weaviate_cfg: VectorStoreConfig,
     ) -> None:
         if not source_cfg.url:
             raise ValueError("RestAPIAdapter requires source.url")

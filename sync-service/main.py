@@ -83,8 +83,8 @@ async def lifespan(app: FastAPI):
     logger.info("Creating collection if missing...")
     # D-09: detect search_mode change — drop index before re-creating when mode changed.
     # detect_search_mode_change returns False on first run (no file) and when mode unchanged.
-    _collection_name = settings.weaviate.collection
-    _current_mode = getattr(settings.weaviate, "search_mode", "hybrid")
+    _collection_name = settings.vector_store.collection
+    _current_mode = getattr(settings.vector_store, "search_mode", "hybrid")
     if detect_search_mode_change(_collection_name, _current_mode):
         logger.warning(
             "search_mode changed for %r — dropping existing index for full re-index (D-09).",
@@ -93,9 +93,9 @@ async def lifespan(app: FastAPI):
         vector_store.drop_index(_collection_name)
     created = vector_store.create_index(settings)
     if created:
-        logger.info("Collection %r created.", settings.weaviate.collection)
+        logger.info("Collection %r created.", settings.vector_store.collection)
     else:
-        logger.info("Collection %r already present.", settings.weaviate.collection)
+        logger.info("Collection %r already present.", settings.vector_store.collection)
     logger.info("Inizializzazione SyncEngine e StateStore...")
     state_store = StateStore()
     logger.info("Checking embedding-model version against persisted state...")
@@ -233,7 +233,7 @@ async def info(
             if global_path.exists():
                 try:
                     gcfg = load_config(global_path)
-                    if gcfg.weaviate.collection == collection:
+                    if gcfg.vector_store.collection == collection:
                         config_path = global_path
                     else:
                         raise HTTPException(status_code=404, detail=f"No config found for collection '{collection}'.")
@@ -251,17 +251,17 @@ async def info(
     total_objects: int | None = None
     if vector_store is not None:
         try:
-            total_objects = vector_store.count(cfg.weaviate.collection)
+            total_objects = vector_store.count(cfg.vector_store.collection)
         except Exception:  # noqa: BLE001
             pass
 
     vector_store_engine = os.getenv("VECTOR_STORE_ENGINE", "weaviate")
-    search_mode = getattr(cfg.weaviate, "search_mode", "hybrid")
+    search_mode = getattr(cfg.vector_store, "search_mode", "hybrid")
 
     return {
         "embedding_model": cfg.embedding.model,
         "embedding_type": cfg.embedding.type,
-        "collection": cfg.weaviate.collection,
+        "collection": cfg.vector_store.collection,
         "weaviate_url": settings.weaviate_url,           # backward compat
         "vector_store_url": settings.weaviate_url,       # Phase 15 D-02
         "vector_store_engine": vector_store_engine,      # Phase 15

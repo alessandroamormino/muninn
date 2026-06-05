@@ -70,7 +70,7 @@ def build_scheduler(app_state, settings):
                     took_ms=0,
                     model=settings.embedding.model,
                     source_type=settings.source.type,
-                    collection=settings.weaviate.collection,
+                    collection=settings.vector_store.collection,
                     inserted=0,
                     updated=0,
                     skipped_records=0,

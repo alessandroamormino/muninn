@@ -175,7 +175,7 @@ def test_search_passes_custom_valid_fields():
     """?fields=<f1,f2> → return_properties=[f1, f2] (D-03)."""
     from config.settings import settings as app_settings
     allowed = sorted(
-        set(app_settings.weaviate.text_fields) | set(app_settings.weaviate.metadata_fields)
+        set(app_settings.vector_store.text_fields) | set(app_settings.vector_store.metadata_fields)
     )
     if len(allowed) < 2:
         pytest.skip("Need at least 2 allowed fields for this test")
@@ -198,7 +198,7 @@ def test_search_rejects_unknown_field():
 def test_search_rejects_partial_invalid_fields():
     """?fields=<valid>,bogus → 422 (strict — do not silently drop)."""
     from config.settings import settings as app_settings
-    valid = list(app_settings.weaviate.text_fields)[0]
+    valid = list(app_settings.vector_store.text_fields)[0]
     resp = TestClient(_make_app()).get(f"/search?q=foo&fields={valid},bogus")
     assert resp.status_code == 422
 
@@ -287,7 +287,7 @@ def test_search_no_filter_passes_none_filters():
 def test_search_single_filter_passed_to_weaviate():
     """filter=ValidField:SomeValue → hybrid() called with filters not None."""
     from config.settings import settings as app_settings
-    valid_meta = app_settings.weaviate.metadata_fields[0]
+    valid_meta = app_settings.vector_store.metadata_fields[0]
     client, collection = _fake_client_factory()
     with patch("api.search.get_client", return_value=client):
         TestClient(_make_app()).get(f"/search?q=foo&filter={valid_meta}:SomeValue")
@@ -298,7 +298,7 @@ def test_search_single_filter_passed_to_weaviate():
 def test_search_multi_filter_passed_to_weaviate():
     """filter=F1:V1,F2:V2 → hybrid() called with filters not None (AND logic)."""
     from config.settings import settings as app_settings
-    meta = app_settings.weaviate.metadata_fields
+    meta = app_settings.vector_store.metadata_fields
     if len(meta) < 2:
         pytest.skip("Need at least 2 metadata_fields for this test")
     f1, f2 = meta[0], meta[1]
@@ -312,7 +312,7 @@ def test_search_multi_filter_passed_to_weaviate():
 def test_search_filter_colon_in_value_is_200():
     """filter=Campo:valore:con:colonne → 200, split on first colon only (D-02)."""
     from config.settings import settings as app_settings
-    valid_meta = app_settings.weaviate.metadata_fields[0]
+    valid_meta = app_settings.vector_store.metadata_fields[0]
     client, _ = _fake_client_factory()
     with patch("api.search.get_client", return_value=client):
         resp = TestClient(_make_app()).get(f"/search?q=foo&filter={valid_meta}:val:with:colons")
@@ -352,8 +352,8 @@ def test_search_filter_unknown_field_returns_422():
 def test_search_filter_text_field_not_filterable():
     """filter on text_fields (not metadata_fields) → 422 (D-06)."""
     from config.settings import settings as app_settings
-    text_only = [f for f in app_settings.weaviate.text_fields
-                 if f not in app_settings.weaviate.metadata_fields]
+    text_only = [f for f in app_settings.vector_store.text_fields
+                 if f not in app_settings.vector_store.metadata_fields]
     if not text_only:
         pytest.skip("No text-only fields available in this config")
     resp = TestClient(_make_app()).get(f"/search?q=foo&filter={text_only[0]}:foo")

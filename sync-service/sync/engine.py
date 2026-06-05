@@ -49,7 +49,7 @@ class SyncEngine:
         self._state = state_store
         self._cache_store = cache_store  # reserved for future direct invalidation
         self._source_adapter = build_source_adapter(
-            app_cfg.source, app_cfg.sync, app_cfg.weaviate
+            app_cfg.source, app_cfg.sync, app_cfg.vector_store
         )
         self._embedding_adapter = build_embedding_adapter(app_cfg.embedding)
         # Iniettabile nei test tramite override: engine._write_model_version_fn = mock_fn
@@ -113,7 +113,7 @@ class SyncEngine:
         Resumable: se esiste un checkpoint per questa collection, riprende dal batch
         successivo all'ultimo completato senza riscaricare né ri-droppare.
         """
-        collection_name = self._cfg.weaviate.collection
+        collection_name = self._cfg.vector_store.collection
 
         # --- Checkpoint: resume o fresh start? -----------------------------------
         ckpt = checkpoint.read(collection_name)
@@ -216,7 +216,7 @@ class SyncEngine:
         }
         # D-21/D-22 (Phase 13.2): warn when large unquantized collection detected.
         # Key is added ONLY when condition is met -- absent key = no warning.
-        q = getattr(self._cfg.weaviate, "quantization", "none")
+        q = getattr(self._cfg.vector_store, "quantization", "none")
         if total > 50_000 and q == "none":
             msg = (
                 f"Collection has {total:,} records but quantization='none'. "

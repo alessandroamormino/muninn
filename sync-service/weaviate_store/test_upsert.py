@@ -6,11 +6,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from config.settings import WeaviateConfig
+from config.settings import VectorStoreConfig
 
 
-def _make_weaviate_cfg(text_fields=("name",), metadata_fields=("id",)) -> WeaviateConfig:
-    return WeaviateConfig(
+def _make_weaviate_cfg(text_fields=("name",), metadata_fields=("id",)) -> VectorStoreConfig:
+    return VectorStoreConfig(
         collection="TestCol",
         text_fields=list(text_fields),
         metadata_fields=list(metadata_fields),

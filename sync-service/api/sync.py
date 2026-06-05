@@ -71,7 +71,7 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
         _cache_store = getattr(app_state, "cache_store", None)
         if _cache_store is not None:
             try:
-                _cache_store.invalidate_collection(fresh_settings.weaviate.collection)
+                _cache_store.invalidate_collection(fresh_settings.vector_store.collection)
             except Exception as _inv_exc:  # noqa: BLE001
                 logger.warning("Cache invalidation failed after sync: %s", _inv_exc)
         took_ms = int((time.perf_counter() - _t0) * 1000)
@@ -85,7 +85,7 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
                 took_ms=took_ms,
                 model=fresh_settings.embedding.model,
                 source_type=fresh_settings.source.type,
-                collection=fresh_settings.weaviate.collection,
+                collection=fresh_settings.vector_store.collection,
                 inserted=result.get("inserted", 0),
                 updated=result.get("updated", 0),
                 skipped_records=result.get("skipped", 0),
@@ -113,7 +113,7 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
                 took_ms=took_ms,
                 model=fresh_settings.embedding.model,
                 source_type=fresh_settings.source.type,
-                collection=fresh_settings.weaviate.collection,
+                collection=fresh_settings.vector_store.collection,
                 inserted=0,
                 updated=0,
                 skipped_records=0,

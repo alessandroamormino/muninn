@@ -69,7 +69,7 @@ def _full_reindex(client, app_cfg: AppConfig) -> UpsertResult:
     Raises on schema-creation or fetch failures (caller decides whether to update
     model_version.json based on success/exception).
     """
-    _drop_collection(client, app_cfg.weaviate.collection)
+    _drop_collection(client, app_cfg.vector_store.collection)
     create_collection_if_missing(client, app_cfg.weaviate, embedding_type=app_cfg.embedding.type)
 
     embedding_adapter = build_embedding_adapter(app_cfg.embedding)

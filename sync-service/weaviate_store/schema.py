@@ -10,7 +10,7 @@ import logging
 
 import weaviate.classes.config as _wvc
 
-from config.settings import WeaviateConfig
+from config.settings import VectorStoreConfig
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def _infer_metadata_datatype(field_name: str):
     return _wvc.DataType.TEXT
 
 
-def _build_properties(weaviate_cfg: WeaviateConfig) -> list:
+def _build_properties(weaviate_cfg: VectorStoreConfig) -> list:
     """Build the Property list: text_fields vectorized, metadata_fields not vectorized.
 
     If a field appears in BOTH text_fields and metadata_fields, the text_fields
@@ -79,7 +79,7 @@ def _build_properties(weaviate_cfg: WeaviateConfig) -> list:
     return properties
 
 
-def _build_quantizer_config(weaviate_cfg: WeaviateConfig, dims: int | None = None):
+def _build_quantizer_config(weaviate_cfg: VectorStoreConfig, dims: int | None = None):
     """Return the HNSW index config (with optional quantizer), or None if no overrides.
 
     Quantization options:
@@ -143,7 +143,7 @@ def _build_quantizer_config(weaviate_cfg: WeaviateConfig, dims: int | None = Non
 
 
 def create_collection_if_missing(
-    client, weaviate_cfg: WeaviateConfig, embedding_type: str = "weaviate_builtin",
+    client, weaviate_cfg: VectorStoreConfig, embedding_type: str = "weaviate_builtin",
     embedding_dims: int | None = None,
 ) -> bool:
     """Create the Weaviate collection if it does not already exist.

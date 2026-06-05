@@ -10,7 +10,7 @@ from sources.rest_api_adapter import RestAPIAdapter
 def build_source_adapter(
     source_cfg: "SourceConfig",
     sync_cfg: "SyncConfig",
-    weaviate_cfg: "WeaviateConfig",
+    weaviate_cfg: "VectorStoreConfig",
 ) -> "BaseSourceAdapter":
     """Factory che restituisce il SourceAdapter corretto in base a source_cfg.type.
 

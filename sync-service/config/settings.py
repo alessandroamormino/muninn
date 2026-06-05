@@ -146,7 +146,7 @@ class FtsConfig(BaseModel):
     language: str = "en"
 
 
-class WeaviateConfig(BaseModel):
+class VectorStoreConfig(BaseModel):
     collection: str = "Products"
     text_fields: list[str] = Field(default_factory=list)
     metadata_fields: list[str] = Field(default_factory=list)
@@ -189,7 +189,7 @@ class GraphConfig(BaseModel):
 class AppConfig(BaseModel):
     source: SourceConfig = Field(default_factory=SourceConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
-    weaviate: WeaviateConfig = Field(default_factory=WeaviateConfig)
+    vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig)
     sync: SyncConfig = Field(default_factory=SyncConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     graph: GraphConfig = Field(default_factory=GraphConfig)

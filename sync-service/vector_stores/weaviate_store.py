@@ -131,7 +131,7 @@ class WeaviateVectorStore(BaseVectorStore):
         import weaviate.classes.query as _wvc_query
 
         client = get_client()
-        collection_obj = client.collections.get(cfg.weaviate.collection)
+        collection_obj = client.collections.get(cfg.vector_store.collection)
 
         # Build Weaviate filter from engine-agnostic (campo, valore) pairs.
         # Weaviate lowercases the first char of every property at schema creation time.

@@ -33,7 +33,7 @@ def _mock_settings():
     s = MagicMock()
     s.embedding.model = "test-model"
     s.source.type = "csv"
-    s.weaviate.collection = "TestCol"
+    s.vector_store.collection = "TestCol"
     return s
 
 

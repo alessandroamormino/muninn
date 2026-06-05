@@ -13,9 +13,9 @@ import pytest
 def _make_mock_cfg(collection: str = "TestCollection") -> MagicMock:
     """Build a minimal mock AppConfig."""
     cfg = MagicMock()
-    cfg.weaviate.collection = collection
-    cfg.weaviate.text_fields = ["title", "description"]
-    cfg.weaviate.metadata_fields = ["id", "category"]
+    cfg.vector_store.collection = collection
+    cfg.vector_store.text_fields = ["title", "description"]
+    cfg.vector_store.metadata_fields = ["id", "category"]
     cfg.embedding.type = "ollama"
     cfg.embedding.dims = 2560
     return cfg

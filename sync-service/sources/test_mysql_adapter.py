@@ -17,7 +17,7 @@ from config.settings import (
     MySQLQueryConfig,
     SourceConfig,
     SyncConfig,
-    WeaviateConfig,
+    VectorStoreConfig,
 )
 from sources.base import BaseSourceAdapter
 
@@ -72,8 +72,8 @@ def _make_sync_cfg(hash_fields: list[str] | None = None) -> SyncConfig:
     return SyncConfig(hash_fields=hash_fields or ["id", "nome"])
 
 
-def _make_weaviate_cfg() -> WeaviateConfig:
-    return WeaviateConfig()
+def _make_weaviate_cfg() -> VectorStoreConfig:
+    return VectorStoreConfig()
 
 
 def _make_adapter(mysql_cfg: MySQLConfig, mock_engine: MagicMock) -> "MySQLAdapter":

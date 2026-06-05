@@ -107,8 +107,8 @@ def test_compute_record_uuid_returns_str_for_qdrant():
 def _make_cfg(collection: str, search_mode: str) -> MagicMock:
     """Build a minimal mock AppConfig with weaviate.collection and weaviate.search_mode."""
     cfg = MagicMock()
-    cfg.weaviate.collection = collection
-    cfg.weaviate.search_mode = search_mode
+    cfg.vector_store.collection = collection
+    cfg.vector_store.search_mode = search_mode
     return cfg
 
 

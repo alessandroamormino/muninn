@@ -59,9 +59,9 @@ _SNOWBALL_MAP: dict[str, str] = {
 
 
 def _get_fts_language(cfg: Any) -> str:
-    """Extract FTS stemmer language from cfg.weaviate.fts.language (default: 'en')."""
+    """Extract FTS stemmer language from cfg.vector_store.fts.language (default: 'en')."""
     try:
-        return cfg.weaviate.fts.language or "en"
+        return cfg.vector_store.fts.language or "en"
     except AttributeError:
         return "en"
 
@@ -125,8 +125,8 @@ class QdrantVectorStore(BaseVectorStore):
         """
         from vector_stores.search_mode_state import write_stored_search_mode
 
-        collection = cfg.weaviate.collection
-        mode = getattr(cfg.weaviate, "search_mode", "hybrid")
+        collection = cfg.vector_store.collection
+        mode = getattr(cfg.vector_store, "search_mode", "hybrid")
 
         if self._client.collection_exists(collection):
             return False
@@ -135,7 +135,7 @@ class QdrantVectorStore(BaseVectorStore):
         vectors_cfg: dict = {}
         if mode in ("hybrid", "vector"):
             # dims from config _embedding_dims if available, else default to 2560 (qwen3-embedding:4b)
-            dims = getattr(cfg.weaviate, "_embedding_dims", None) or 2560
+            dims = getattr(cfg.vector_store, "_embedding_dims", None) or 2560
             vectors_cfg["dense"] = qmodels.VectorParams(
                 size=dims,
                 distance=qmodels.Distance.COSINE,
@@ -217,11 +217,11 @@ class QdrantVectorStore(BaseVectorStore):
         - Always stores _fts_text payload field (joined text_fields)
         - UUID deterministic: str(uuid5(NAMESPACE_DNS, source_type:record_id))
         """
-        mode = getattr(cfg.weaviate, "search_mode", "hybrid")
+        mode = getattr(cfg.vector_store, "search_mode", "hybrid")
         if id_field is None:
             id_field = cfg.source.id_field
-        collection = cfg.weaviate.collection
-        text_fields: list[str] = cfg.weaviate.text_fields or []
+        collection = cfg.vector_store.collection
+        text_fields: list[str] = cfg.vector_store.text_fields or []
 
         # --- Embedding (skip for fts mode, D-08) ---
         if mode != "fts" and embedding_adapter is not None:
@@ -313,7 +313,7 @@ class QdrantVectorStore(BaseVectorStore):
         Filters: FieldCondition with MatchValue. Qdrant does NOT lowercase field names
         (unlike Weaviate). Use campo as-is.
         """
-        collection = cfg.weaviate.collection
+        collection = cfg.vector_store.collection
 
         # Build filter
         qdrant_filter = None

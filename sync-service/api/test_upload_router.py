@@ -174,7 +174,7 @@ def test_confirm_lock_released_after_sync(tmp_path):
     ):
         mock_write.return_value = tmp_path / "config.yaml"
         mock_cfg = MagicMock()
-        mock_cfg.weaviate.collection = "Test"
+        mock_cfg.vector_store.collection = "Test"
         mock_cfg.embedding.model = "qwen3-embedding:4b"
         mock_cfg.source.type = "csv"
         mock_load.return_value = mock_cfg
@@ -248,7 +248,7 @@ def test_confirm_logs_full_type(tmp_path):
     ):
         mock_write.return_value = tmp_path / "config.yaml"
         mock_cfg = MagicMock()
-        mock_cfg.weaviate.collection = "Test"
+        mock_cfg.vector_store.collection = "Test"
         mock_cfg.embedding.model = "qwen3-embedding:4b"
         mock_cfg.source.type = "csv"
         mock_load.return_value = mock_cfg

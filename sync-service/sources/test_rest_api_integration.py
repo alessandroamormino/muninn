@@ -19,7 +19,7 @@ from config.settings import (
     PaginationConfig,
     SourceConfig,
     SyncConfig,
-    WeaviateConfig,
+    VectorStoreConfig,
 )
 from sources.rest_api_adapter import RestAPIAdapter
 
@@ -52,7 +52,7 @@ class TestPokeapiShape:
             pagination=PaginationConfig(type="cursor", next_key="next"),
         )
         syn = SyncConfig(hash_fields=["name", "url"])
-        wea = WeaviateConfig()
+        wea = VectorStoreConfig()
 
         page1 = {
             "count": 1302,
@@ -106,7 +106,7 @@ class TestPokeapiShape:
             ),
         )
         syn = SyncConfig(hash_fields=["name", "url"])
-        wea = WeaviateConfig()
+        wea = VectorStoreConfig()
 
         records = RestAPIAdapter(src, syn, wea).fetch_records()
 
@@ -142,7 +142,7 @@ class TestTmdbShape:
             ),
         )
         syn = SyncConfig(hash_fields=["id", "title"])
-        wea = WeaviateConfig()
+        wea = VectorStoreConfig()
 
         page1 = {
             "page": 1,
@@ -193,7 +193,7 @@ class TestTmdbShape:
             ),
         )
         syn = SyncConfig(hash_fields=["id"])
-        wea = WeaviateConfig()
+        wea = VectorStoreConfig()
 
         with patch("sources.rest_api_adapter.requests.get") as mock_get:
             mock_get.return_value = _make_response(
@@ -229,7 +229,7 @@ class TestStaticParamsPersistence:
             pagination=PaginationConfig(type="page", total_pages_key="total_pages"),
         )
         syn = SyncConfig(hash_fields=["id"])
-        wea = WeaviateConfig()
+        wea = VectorStoreConfig()
 
         with patch("sources.rest_api_adapter.requests.get") as mock_get:
             mock_get.side_effect = [

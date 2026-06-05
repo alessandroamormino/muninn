@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sources.base import BaseSourceAdapter
-from config.settings import SourceConfig, SyncConfig, WeaviateConfig
+from config.settings import SourceConfig, SyncConfig, VectorStoreConfig
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class CSVAdapter(BaseSourceAdapter):
         self,
         source_cfg: SourceConfig,
         sync_cfg: SyncConfig,
-        weaviate_cfg: WeaviateConfig,
+        weaviate_cfg: VectorStoreConfig,
     ) -> None:
         if not source_cfg.file_path:
             raise ValueError("source.file_path must be set for CSVAdapter")

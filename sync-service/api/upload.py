@@ -60,7 +60,7 @@ def _resolve_config_path(collection: str) -> Path | None:
     if _GLOBAL_CONFIG.exists():
         try:
             gcfg = load_config(_GLOBAL_CONFIG)
-            if gcfg.weaviate.collection == collection:
+            if gcfg.vector_store.collection == collection:
                 return _GLOBAL_CONFIG
         except Exception:  # noqa: BLE001
             pass
@@ -214,7 +214,7 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "",
 
     try:
         temp_cfg = load_config(config_path)                        # D-04
-        collection_lower = temp_cfg.weaviate.collection.lower()
+        collection_lower = temp_cfg.vector_store.collection.lower()
         # Per-entity StateStore: avoids wiping global sync_state.json (A3)
         temp_state = StateStore(Path("/app/.sync") / f"state_{collection_lower}.json")
         engine = SyncEngine(temp_cfg, get_client(), temp_state)   # D-03/D-04
@@ -231,7 +231,7 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "",
         else:
             result = engine.run_incremental()
 
-        app_state.sync_status = {"status": "completed", "collection": temp_cfg.weaviate.collection, "last_run": {**result, "collection": temp_cfg.weaviate.collection}}
+        app_state.sync_status = {"status": "completed", "collection": temp_cfg.vector_store.collection, "last_run": {**result, "collection": temp_cfg.vector_store.collection}}
         if app_state.upload_status:
             app_state.upload_status["status"] = "done"
             app_state.upload_status["sync_status"] = app_state.sync_status
@@ -248,7 +248,7 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "",
                 took_ms=took_ms,
                 model=temp_cfg.embedding.model,           # temp_cfg, NOT settings — Pitfall 5
                 source_type=temp_cfg.source.type,
-                collection=temp_cfg.weaviate.collection,
+                collection=temp_cfg.vector_store.collection,
                 inserted=result.get("inserted", 0),
                 updated=result.get("updated", 0),
                 skipped_records=result.get("skipped", 0),

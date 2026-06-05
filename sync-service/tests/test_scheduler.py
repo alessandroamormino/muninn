@@ -99,7 +99,7 @@ class TestScheduledJobLockFree:
         s.sync.schedule = "0 */6 * * *"
         s.embedding.model = "test-model"
         s.source.type = "csv"
-        s.weaviate.collection = "TestCol"
+        s.vector_store.collection = "TestCol"
         return s
 
     def test_calls_run_sync_bg_when_lock_free(self):
@@ -149,7 +149,7 @@ class TestScheduledJobLockConflict:
         s.sync.schedule = "0 */6 * * *"
         s.embedding.model = "test-model"
         s.source.type = "csv"
-        s.weaviate.collection = "TestCol"
+        s.vector_store.collection = "TestCol"
         return s
 
     def test_does_not_call_run_sync_bg_when_lock_held(self):

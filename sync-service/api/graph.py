@@ -91,7 +91,7 @@ async def list_collections(_: UserRecord = Depends(get_current_user)) -> dict:
     if global_yaml.exists():
         try:
             gcfg = load_config(global_yaml)
-            gname = gcfg.weaviate.collection
+            gname = gcfg.vector_store.collection
             if not any(it["name"] == gname for it in items):
                 items.append({"name": gname, "source_type": gcfg.source.type, "is_global": True})
         except Exception:  # noqa: BLE001

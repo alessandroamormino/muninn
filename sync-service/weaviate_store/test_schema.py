@@ -5,12 +5,12 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from config.settings import HnswConfig, WeaviateConfig
+from config.settings import HnswConfig, VectorStoreConfig
 
 
-def _make_cfg(quantization="none", ef=None, max_connections=None) -> WeaviateConfig:
+def _make_cfg(quantization="none", ef=None, max_connections=None) -> VectorStoreConfig:
     hnsw = HnswConfig(ef=ef, max_connections=max_connections)
-    return WeaviateConfig(
+    return VectorStoreConfig(
         collection="TestCol",
         text_fields=["name"],
         metadata_fields=["id"],

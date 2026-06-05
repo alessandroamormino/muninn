@@ -12,7 +12,7 @@ from pathlib import Path
 import requests
 
 from sources.base import BaseSourceAdapter
-from config.settings import SourceConfig, SyncConfig, WeaviateConfig
+from config.settings import SourceConfig, SyncConfig, VectorStoreConfig
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class JSONAdapter(BaseSourceAdapter):
         self,
         source_cfg: SourceConfig,
         sync_cfg: SyncConfig,
-        weaviate_cfg: WeaviateConfig,
+        weaviate_cfg: VectorStoreConfig,
     ) -> None:
         self._url = source_cfg.url
         self._file_path = Path(source_cfg.file_path) if source_cfg.file_path else None

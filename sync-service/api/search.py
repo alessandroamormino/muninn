@@ -199,7 +199,7 @@ async def search(
         cfg = settings
 
     # --- Effective collection name (used for cache keying and history logging) --
-    effective_collection = collection if collection is not None else cfg.weaviate.collection
+    effective_collection = collection if collection is not None else cfg.vector_store.collection
 
     # --- Cache + history references (resolved once, used on both hit and miss paths) ---
     cache_store = getattr(request.app.state, "cache_store", None)
@@ -237,7 +237,7 @@ async def search(
         )
 
     # --- Field projection --------------------------------------------------
-    allowed = set(cfg.weaviate.text_fields) | set(cfg.weaviate.metadata_fields)
+    allowed = set(cfg.vector_store.text_fields) | set(cfg.vector_store.metadata_fields)
     if fields:
         requested = [f.strip() for f in fields.split(",") if f.strip()]
         invalid = [f for f in requested if f not in allowed]
@@ -258,7 +258,7 @@ async def search(
     # inside the vector store implementation — search.py stays engine-agnostic.
     parsed_filter_pairs: list[tuple[str, str]] = []
     if filter is not None:
-        filterable_fields = set(cfg.weaviate.metadata_fields)
+        filterable_fields = set(cfg.vector_store.metadata_fields)
         pairs = [p.strip() for p in filter.split(",") if p.strip()]
         for pair in pairs:
             if ":" not in pair:
@@ -334,7 +334,7 @@ async def search(
         effective_mode = (
             search_mode_override
             if search_mode_override is not None
-            else getattr(cfg.weaviate, "search_mode", "hybrid")
+            else getattr(cfg.vector_store, "search_mode", "hybrid")
         )
         search_hits = vector_store.search(
             query=expand_q,

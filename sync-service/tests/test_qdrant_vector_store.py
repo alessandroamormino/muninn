@@ -25,11 +25,11 @@ from qdrant_client import models as qmodels
 def _make_cfg(search_mode: str = "hybrid", collection: str = "TestCollection",
               text_fields: list | None = None, fts_language: str = "en"):
     cfg = MagicMock()
-    cfg.weaviate.collection = collection
-    cfg.weaviate.search_mode = search_mode
-    cfg.weaviate.text_fields = text_fields or ["name", "description"]
-    cfg.weaviate.metadata_fields = ["ruolo"]
-    cfg.weaviate.fts.language = fts_language
+    cfg.vector_store.collection = collection
+    cfg.vector_store.search_mode = search_mode
+    cfg.vector_store.text_fields = text_fields or ["name", "description"]
+    cfg.vector_store.metadata_fields = ["ruolo"]
+    cfg.vector_store.fts.language = fts_language
     cfg.source.id_field = "id"
     return cfg
 
