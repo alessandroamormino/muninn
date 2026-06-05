@@ -38,6 +38,7 @@ from auth.dependencies import get_current_user
 from auth.user_store import UserRecord
 from config.settings import _CONFIG_PATH, load_config, settings
 from embeddings import build_embedding_adapter
+from vector_stores.synonyms import _load_synonyms, _expand_query
 
 _CONFIG_ROOT = _CONFIG_PATH.parent  # configuration/ dir (container) or project_root/configuration/ (host)
 
@@ -173,6 +174,10 @@ async def search(
         default=None,
         description="Nome della collection Weaviate (es. 'Collaboratori'). Se omesso usa config.yaml globale.",
     ),
+    search_mode_override: Optional[str] = Query(
+        default=None,
+        description="Override search_mode for this request (e.g. 'fts', 'bm25', 'vector', 'hybrid'). If omitted uses entity config.",
+    ),
     _user: UserRecord = Depends(get_current_user),
 ) -> dict:
     """Ricerca ibrida (BM25 + semantica). Ritorna {query, results:[{...props, _score}, ...], cached}."""
@@ -303,27 +308,41 @@ async def search(
     _t0 = time.perf_counter()
     try:
         vector_store = request.app.state.vector_store
-        # Synonym expansion hook: no-op for Weaviate; actual expansion done in Plan 02 for Qdrant.
-        # Weaviate path uses embed_q as-is.
-        expand_q = embed_q  # identity — synonym expansion applied in Plan 02 for Qdrant
+        # Synonym expansion for Qdrant (D-13): applied at query-time to all Qdrant modes.
+        # For Weaviate, synonym expansion is not needed — built-in BM25 handles it.
+        engine = os.getenv("VECTOR_STORE_ENGINE", "weaviate")
+        expand_q = embed_q
+        if engine == "qdrant" and effective_collection is not None:
+            synonym_groups = _load_synonyms(_CONFIG_ROOT, effective_collection)
+            if synonym_groups:
+                expand_q = _expand_query(embed_q, synonym_groups)
+                if expand_q != embed_q:
+                    logger.info(
+                        "Synonym expansion: %r → %r (collection=%r)",
+                        embed_q, expand_q, effective_collection,
+                    )
 
         if embedding_adapter is not None:
-            # Client-side embedding: embed the clean query (negation stripped) for
-            # a better semantic vector. The original q is still passed as BM25 text
-            # so keyword matches still work.
+            # Client-side embedding: embed the clean query (negation stripped + synonyms expanded)
+            # for a better semantic vector. The original q is still passed as BM25 text.
             query_vectors = embedding_adapter.embed([expand_q])
             query_vector = query_vectors[0]
         else:
             query_vector = None
 
-        search_mode = getattr(cfg.weaviate, "search_mode", "hybrid")
+        # Determine effective search mode: request override takes precedence over entity config.
+        effective_mode = (
+            search_mode_override
+            if search_mode_override is not None
+            else getattr(cfg.weaviate, "search_mode", "hybrid")
+        )
         search_hits = vector_store.search(
             query=expand_q,
             query_vector=query_vector,
             cfg=cfg,
             filters=parsed_filter_pairs if parsed_filter_pairs else None,
             limit=fetch_limit,
-            mode=search_mode,
+            mode=effective_mode,
         )
     except HTTPException:
         raise
