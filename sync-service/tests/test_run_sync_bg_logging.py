@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import threading
 import types
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,6 +24,7 @@ def _make_state(log_store=None):
         sync_lock=lock,
         sync_status={},
         sync_engine=engine,
+        vector_store=MagicMock(),
         log_store=log_store,
     ), engine
 
@@ -35,6 +37,16 @@ def _mock_settings():
     return s
 
 
+@contextmanager
+def _patch_sync_bg(engine_mock):
+    """Patch load_config and SyncEngine so _run_sync_bg uses the provided mock engine."""
+    mock_settings = _mock_settings()
+    with patch("api.sync.load_config", return_value=mock_settings), \
+         patch("api.sync.SyncEngine", return_value=engine_mock), \
+         patch("api.sync.settings", mock_settings):
+        yield
+
+
 class TestRunSyncBgLoggingSuccess:
     def test_records_completed_on_success(self):
         """Successful incremental sync -> log_store.record(status='completed')."""
@@ -45,7 +57,7 @@ class TestRunSyncBgLoggingSuccess:
             "skipped": 0, "errors": 0, "timestamp": "2026-01-01T00:00:00Z",
         }
 
-        with patch("api.sync.settings", _mock_settings()):
+        with _patch_sync_bg(engine):
             _run_sync_bg(state, mode="incremental", triggered_by="api")
 
         mock_log_store.record.assert_called_once()
@@ -111,7 +123,7 @@ class TestRunSyncBgLoggingFailure:
         state, engine = _make_state(log_store=mock_log_store)
         engine.run_incremental.side_effect = RuntimeError("Connection lost")
 
-        with patch("api.sync.settings", _mock_settings()):
+        with _patch_sync_bg(engine):
             _run_sync_bg(state, mode="incremental", triggered_by="api")
 
         mock_log_store.record.assert_called_once()

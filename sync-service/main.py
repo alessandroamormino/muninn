@@ -43,13 +43,9 @@ from config.settings import _CONFIG_PATH, load_config, settings
 from embeddings import build_embedding_adapter
 from sync.engine import SyncEngine
 from sync.state_store import StateStore
-from weaviate_store import (
-    open_client,
-    close_client,
-    create_collection_if_missing,
-    check_and_handle_model_change,
-    get_client,
-)
+from vector_stores import get_vector_store
+from vector_stores.base import validate_search_mode_compatibility
+from weaviate_store.model_version import check_and_handle_model_change
 
 logger = logging.getLogger(__name__)
 
@@ -63,20 +59,40 @@ async def lifespan(app: FastAPI):
             "JWT_SECRET env var is missing or too short (min 32 chars). "
             "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
         )
-    logger.info("sync-service starting; opening Weaviate client...")
-    open_client()
-    logger.info("Creating Weaviate collection if missing...")
-    created = create_collection_if_missing(
-        get_client(), settings.weaviate, embedding_type=settings.embedding.type
-    )
+
+    # --- Vector store engine selection (Phase 15 D-01) ---------------------------
+    engine = os.getenv("VECTOR_STORE_ENGINE", "weaviate")
+    logger.info("sync-service starting; vector_store_engine=%r url=%r", engine, settings.weaviate_url)
+    vector_store = get_vector_store(engine, settings.weaviate_url)
+
+    # --- D-04: fail-fast on incompatible search_mode at startup ------------------
+    # Collect all entity configs from configuration/ subdirectories + global config.
+    _config_root = _CONFIG_PATH.parent
+    _entity_configs: list = [settings]  # always include global config
+    if _config_root.exists():
+        for _d in _config_root.iterdir():
+            if _d.is_dir() and (_d / "config.yaml").exists():
+                try:
+                    _entity_configs.append(load_config(_d / "config.yaml"))
+                except Exception:  # noqa: BLE001
+                    pass
+    validate_search_mode_compatibility(engine, _entity_configs)  # raises RuntimeError on mismatch
+
+    vector_store.open()
+    logger.info("Creating collection if missing...")
+    created = vector_store.create_index(settings)
     if created:
-        logger.info("Weaviate collection %r created.", settings.weaviate.collection)
+        logger.info("Collection %r created.", settings.weaviate.collection)
     else:
-        logger.info("Weaviate collection %r already present.", settings.weaviate.collection)
+        logger.info("Collection %r already present.", settings.weaviate.collection)
     logger.info("Inizializzazione SyncEngine e StateStore...")
     state_store = StateStore()
     logger.info("Checking embedding-model version against persisted state...")
-    check_and_handle_model_change(get_client(), settings, state_store=state_store)
+    # check_and_handle_model_change still uses weaviate_store directly for model_version.json
+    # management — this is intentional: model_version tracking is engine-agnostic bookkeeping.
+    # For model mismatch re-index, it creates its own SyncEngine internally using weaviate_store;
+    # this is acceptable since it only runs on model change (rare startup event).
+    check_and_handle_model_change(vector_store, settings, state_store=state_store)
     app.state.embedding_adapter = build_embedding_adapter(settings.embedding)
     history_store = HistoryStore(Path("/app/.sync/search_history.db"))
     app.state.history_store = history_store
@@ -84,7 +100,8 @@ async def lifespan(app: FastAPI):
     cache_store = build_cache_adapter(settings)
     app.state.cache_store = cache_store
     logger.info("CacheAdapter ready (mode=%r, ttl=%ds)", settings.api.cache_mode, settings.api.cache_ttl_seconds)
-    app.state.sync_engine = SyncEngine(settings, get_client(), state_store, cache_store=cache_store)
+    app.state.vector_store = vector_store
+    app.state.sync_engine = SyncEngine(settings, vector_store, state_store, cache_store=cache_store)
     app.state.sync_lock = threading.Lock()
     app.state.sync_status = {"status": "idle", "last_run": None}
     app.state.sync_progress = None  # populated during active sync, cleared on completion
@@ -119,7 +136,7 @@ async def lifespan(app: FastAPI):
     logger.info("SyncEngine pronto.")
     yield
     # Shutdown
-    logger.info("sync-service shutting down; closing Weaviate client...")
+    logger.info("sync-service shutting down; closing vector store...")
     if app.state.scheduler is not None:
         app.state.scheduler.shutdown(wait=False)
         logger.info("APScheduler stopped.")
@@ -131,7 +148,7 @@ async def lifespan(app: FastAPI):
     logger.info("CacheStore closed.")
     app.state.user_store.close()
     logger.info("UserStore closed.")
-    close_client()
+    vector_store.close()
 
 
 app = FastAPI(
@@ -160,16 +177,19 @@ app.include_router(config_router)
 
 
 @app.get("/health")
-async def health(response: Response) -> dict:
-    """Health check. Probes Weaviate is_live(); returns HTTP 503 if unreachable.
+async def health(request: Request, response: Response) -> dict:
+    """Health check. Probes vector store is_live(); returns HTTP 503 if unreachable.
 
     Per CONTEXT.md D-07: makes the docker-compose healthcheck meaningful by
-    reporting actual Weaviate state, not just that the FastAPI process is alive.
+    reporting actual vector store state, not just that the FastAPI process is alive.
     """
-    try:
-        alive = get_client().is_live()
-    except Exception:  # noqa: BLE001
-        alive = False
+    vector_store = getattr(request.app.state, "vector_store", None)
+    alive = False
+    if vector_store is not None:
+        try:
+            alive = vector_store.is_live()
+        except Exception:  # noqa: BLE001
+            alive = False
     if alive:
         return {"status": "ok"}
     response.status_code = 503
@@ -182,13 +202,15 @@ _INFO_CONFIG_ROOT = _CONFIG_PATH.parent
 
 @app.get("/info")
 async def info(
+    request: Request,
     collection: Optional[str] = Query(None, description="Nome collection (es. 'CollaboratoriDB'). Se omesso usa config globale."),
     _: UserRecord = Depends(get_current_user),
 ) -> dict:
-    """Service info. Adds total_objects from a live aggregate query.
+    """Service info. Adds total_objects from a live count query.
 
-    Per CONTEXT.md D-06: total_objects is null on any Weaviate failure rather
+    Per CONTEXT.md D-06: total_objects is null on any vector store failure rather
     than raising and surfacing a 5xx. All other keys preserved verbatim.
+    Phase 15 adds: vector_store_engine and search_mode fields.
     """
     if collection is not None:
         if not _INFO_COLLECTION_RE.match(collection):
@@ -214,21 +236,25 @@ async def info(
     else:
         cfg = settings
 
+    vector_store = getattr(request.app.state, "vector_store", None)
     total_objects: int | None = None
-    try:
-        agg = (
-            get_client()
-            .collections.get(cfg.weaviate.collection)
-            .aggregate.over_all(total_count=True)
-        )
-        total_objects = agg.total_count
-    except Exception:  # noqa: BLE001
-        pass
+    if vector_store is not None:
+        try:
+            total_objects = vector_store.count(cfg.weaviate.collection)
+        except Exception:  # noqa: BLE001
+            pass
+
+    vector_store_engine = os.getenv("VECTOR_STORE_ENGINE", "weaviate")
+    search_mode = getattr(cfg.weaviate, "search_mode", "hybrid")
+
     return {
         "embedding_model": cfg.embedding.model,
         "embedding_type": cfg.embedding.type,
         "collection": cfg.weaviate.collection,
-        "weaviate_url": settings.weaviate_url,
+        "weaviate_url": settings.weaviate_url,           # backward compat
+        "vector_store_url": settings.weaviate_url,       # Phase 15 D-02
+        "vector_store_engine": vector_store_engine,      # Phase 15
+        "search_mode": search_mode,                      # Phase 15
         "sync_mode": cfg.sync.mode,
         "sync_schedule": cfg.sync.schedule,
         "total_objects": total_objects,

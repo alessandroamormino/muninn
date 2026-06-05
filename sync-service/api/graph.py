@@ -22,7 +22,7 @@ from typing import Optional
 
 import numpy as np
 import umap
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sklearn.cluster import HDBSCAN
 
 from auth.dependencies import get_current_user
@@ -31,7 +31,6 @@ from auth.user_store import UserRecord
 from api.setup import _sanitize_cell
 from config.settings import _CONFIG_PATH, AppConfig, load_config, settings
 from llm.ollama_llm import LLMError, OllamaLLMClient
-from weaviate_store.client import get_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -103,47 +102,48 @@ async def list_collections(_: UserRecord = Depends(get_current_user)) -> dict:
 
 @router.get("/graph/{collection}")
 async def get_graph(
+    request: Request,
     collection: str,
     max_nodes: int = Query(default=2000, ge=10, le=2000),
     _: UserRecord = Depends(get_current_user),
 ) -> dict:
-    """Compute and return a knowledge graph for the given Weaviate collection.
+    """Compute and return a knowledge graph for the given collection.
 
     Steps:
     1. Validate collection name (regex guard — T-11-01, BEFORE any I/O).
-    2. Fetch up to max_nodes vectors from Weaviate (T-11-02 DoS cap).
+    2. Fetch up to max_nodes vectors via BaseVectorStore.get_vectors_for_graph()
+       (T-11-02 DoS cap). Returns None for FTS-only collections (D-10).
     3. UMAP 2D dimensionality reduction (Pitfall 3: n_neighbors guard).
     4. sklearn HDBSCAN clustering (Pitfall 7: no standalone hdbscan).
-    5. K-NN edges from reducer.graph_ (avoids N Weaviate roundtrips).
+    5. K-NN edges from reducer.graph_ (avoids N roundtrips).
     6. LLM cluster naming via Ollama qwen2.5:3b (D-15), graceful fallback (Pitfall 5).
 
     Returns {"nodes": [...], "edges": [...], "clusters": [...]}.
     """
-    # Step 1: path-traversal guard BEFORE any I/O (T-11-01)
+    # Step 1: path-traversal guard BEFORE any I/O (T-11-01, T-15-02)
     _validate_collection_name(collection)
 
     col_settings = _load_collection_config(collection)
 
     try:
-        client = get_client()
-        col = client.collections.get(collection)
+        # Step 2: fetch vectors via abstraction layer (engine-agnostic)
+        vector_store = request.app.state.vector_store
+        raw_points = vector_store.get_vectors_for_graph(collection, max_nodes=max_nodes)
 
-        # Step 2: fetch vectors (cap at max_nodes)
-        vectors: list[np.ndarray] = []
-        records: list[dict] = []
-        for obj in col.iterator(include_vector=True):
-            # Pitfall 4: guard against missing 'default' key for named vectors
-            raw_vec = None
-            if isinstance(obj.vector, dict):
-                raw_vec = obj.vector.get("default")
-                if raw_vec is None and obj.vector:
-                    raw_vec = next(iter(obj.vector.values()))
-            if raw_vec is None:
-                continue
-            vectors.append(np.asarray(raw_vec, dtype=np.float32))
-            records.append({"id": str(obj.uuid), **dict(obj.properties)})
-            if len(vectors) >= max_nodes:
-                break
+        # D-10: FTS-only collections have no dense vectors — graph is disabled.
+        if raw_points is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Knowledge Graph non disponibile con search_mode: fts. "
+                    "Cambia modalità a hybrid o vector per abilitarlo."
+                ),
+            )
+
+        vectors: list[np.ndarray] = [
+            np.asarray(pt["vector"], dtype=np.float32) for pt in raw_points
+        ]
+        records: list[dict] = [pt["payload"] for pt in raw_points]
 
         if len(vectors) < 10:
             raise HTTPException(

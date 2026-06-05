@@ -34,13 +34,10 @@ from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-import weaviate.classes.query as _wvc_query
-
 from auth.dependencies import get_current_user
 from auth.user_store import UserRecord
 from config.settings import _CONFIG_PATH, load_config, settings
 from embeddings import build_embedding_adapter
-from weaviate_store.client import get_client
 
 _CONFIG_ROOT = _CONFIG_PATH.parent  # configuration/ dir (container) or project_root/configuration/ (host)
 
@@ -251,11 +248,13 @@ async def search(
         return_props = [f for f in cfg.api.output_fields if f in allowed] or list(allowed)
 
     # --- Filter parsing (D-01 through D-09) ------------------------------------
-    weaviate_filter = None
+    # Parse campo:valore pairs into engine-agnostic list[tuple[str, str]].
+    # Engine-specific transforms (e.g. Weaviate first-char lowercase) are applied
+    # inside the vector store implementation — search.py stays engine-agnostic.
+    parsed_filter_pairs: list[tuple[str, str]] = []
     if filter is not None:
         filterable_fields = set(cfg.weaviate.metadata_fields)
         pairs = [p.strip() for p in filter.split(",") if p.strip()]
-        parsed_filters = []
         for pair in pairs:
             if ":" not in pair:
                 raise HTTPException(
@@ -275,13 +274,7 @@ async def search(
                     status_code=422,
                     detail=f"Field '{campo}' is not in metadata_fields. Filterable fields: {sorted(filterable_fields)}",
                 )
-            # Weaviate lowercases the first char of every property name at schema creation time.
-            weaviate_campo = campo[0].lower() + campo[1:] if campo else campo
-            parsed_filters.append(_wvc_query.Filter.by_property(weaviate_campo).like(valore))
-        if parsed_filters:
-            weaviate_filter = parsed_filters[0]
-            for f in parsed_filters[1:]:
-                weaviate_filter = weaviate_filter & f  # D-08: AND logic
+            parsed_filter_pairs.append((campo, valore))
 
     # --- Negation detection ---------------------------------------------------
     # Detect Italian negation tokens in the query. When found:
@@ -300,10 +293,7 @@ async def search(
                 embed_q, neg_entities, fetch_limit,
             )
 
-    # --- Weaviate hybrid query (BM25 + vector) --------------------------------
-    # alpha=0.5 balances keyword and semantic equally. Keyword component (BM25)
-    # handles names, codes, exact strings; semantic component handles concepts
-    # and natural language. Both work from the same search bar with no user config.
+    # --- Vector store search (engine-agnostic via BaseVectorStore.search()) ----
     # Per-entity collections may use a different embedding model than the global config.
     # Build the adapter from the resolved cfg so query dims match the indexed vectors.
     if collection is not None:
@@ -312,31 +302,29 @@ async def search(
         embedding_adapter = getattr(request.app.state, "embedding_adapter", None)
     _t0 = time.perf_counter()
     try:
-        weaviate_col = get_client().collections.get(cfg.weaviate.collection)
+        vector_store = request.app.state.vector_store
+        # Synonym expansion hook: no-op for Weaviate; actual expansion done in Plan 02 for Qdrant.
+        # Weaviate path uses embed_q as-is.
+        expand_q = embed_q  # identity — synonym expansion applied in Plan 02 for Qdrant
+
         if embedding_adapter is not None:
             # Client-side embedding: embed the clean query (negation stripped) for
             # a better semantic vector. The original q is still passed as BM25 text
             # so keyword matches still work.
-            query_vectors = embedding_adapter.embed([embed_q])
-            results = weaviate_col.query.hybrid(
-                query=embed_q,
-                vector=query_vectors[0],
-                alpha=0.5,
-                limit=fetch_limit,
-                return_properties=return_props,
-                return_metadata=_wvc_query.MetadataQuery(score=True),
-                filters=weaviate_filter,
-            )
+            query_vectors = embedding_adapter.embed([expand_q])
+            query_vector = query_vectors[0]
         else:
-            # Server-side vectorization: hybrid() lets Weaviate vectorize internally
-            results = weaviate_col.query.hybrid(
-                query=embed_q,
-                alpha=0.5,
-                limit=fetch_limit,
-                return_properties=return_props,
-                return_metadata=_wvc_query.MetadataQuery(score=True),
-                filters=weaviate_filter,
-            )
+            query_vector = None
+
+        search_mode = getattr(cfg.weaviate, "search_mode", "hybrid")
+        search_hits = vector_store.search(
+            query=expand_q,
+            query_vector=query_vector,
+            cfg=cfg,
+            filters=parsed_filter_pairs if parsed_filter_pairs else None,
+            limit=fetch_limit,
+            mode=search_mode,
+        )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -345,12 +333,14 @@ async def search(
 
     # --- Post-filter: apply negation exclusions and min_score -----------------
     hits = []
-    for obj in results.objects:
-        if min_score is not None and obj.metadata.score < min_score:
+    for hit in search_hits:
+        if min_score is not None and hit.score < min_score:
             continue
-        if neg_entities and _apply_negation_filter(obj.properties, neg_entities):
+        if neg_entities and _apply_negation_filter(hit.properties, neg_entities):
             continue
-        hits.append({**obj.properties, "_score": obj.metadata.score})
+        # Apply field projection: only include return_props from the hit properties
+        projected = {k: v for k, v in hit.properties.items() if k in return_props} if return_props else dict(hit.properties)
+        hits.append({**projected, "_score": hit.score})
         if len(hits) >= effective_limit:
             break
 

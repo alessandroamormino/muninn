@@ -16,7 +16,6 @@ from auth.dependencies import get_current_user, require_admin
 from auth.user_store import UserRecord
 from config.settings import load_config, settings
 from sync.engine import SyncEngine
-from weaviate_store import get_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -27,7 +26,7 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
     # Reload config from disk on every sync so changes to config.yaml take effect
     # without restarting the container (e.g. after uploading a new file/config).
     fresh_settings = load_config()
-    engine = SyncEngine(fresh_settings, get_client(), app_state.sync_engine._state)
+    engine = SyncEngine(fresh_settings, app_state.vector_store, app_state.sync_engine._state)
     _t0 = time.perf_counter()
     _started_at = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
     _log_store = getattr(app_state, "log_store", None)

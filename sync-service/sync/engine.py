@@ -6,9 +6,9 @@ Implementa:
 
 Dipende da:
   - StateStore (sync/state_store.py)
-  - upsert_records / compute_record_uuid (weaviate_store/upsert.py)
+  - BaseVectorStore (vector_stores/base.py) — engine-agnostic interface
   - build_source_adapter (sources/__init__.py)
-  - create_collection_if_missing (weaviate_store/schema.py)
+  - write_stored_model (weaviate_store/model_version.py) — still model_version.json
 """
 from __future__ import annotations
 
@@ -21,15 +21,13 @@ from embeddings import build_embedding_adapter
 from sources import build_source_adapter
 from sync import checkpoint
 from sync.state_store import StateStore
-from weaviate_store.upsert import upsert_records, compute_record_uuid, _EMBED_BATCH_SIZE
-from weaviate_store.schema import create_collection_if_missing
+from vector_stores.base import BaseVectorStore, IndexResult, compute_record_uuid
 from weaviate_store.model_version import write_stored_model
 
 logger = logging.getLogger(__name__)
 
-
-def _default_create_collection(client: Any, weaviate_cfg: Any) -> None:
-    create_collection_if_missing(client, weaviate_cfg)
+# Batch size constant (mirrors weaviate_store/upsert.py _EMBED_BATCH_SIZE)
+_EMBED_BATCH_SIZE = 1000
 
 
 def _default_write_model_version(model: str) -> None:
@@ -42,23 +40,18 @@ class SyncEngine:
     def __init__(
         self,
         app_cfg: AppConfig,
-        client: Any,
+        vector_store: BaseVectorStore,
         state_store: StateStore,
         cache_store: Any | None = None,
     ) -> None:
         self._cfg = app_cfg
-        self._client = client
+        self._vector_store = vector_store
         self._state = state_store
         self._cache_store = cache_store  # reserved for future direct invalidation
         self._source_adapter = build_source_adapter(
             app_cfg.source, app_cfg.sync, app_cfg.weaviate
         )
         self._embedding_adapter = build_embedding_adapter(app_cfg.embedding)
-        # Iniettabile nei test tramite override: engine._create_collection_fn = mock_fn
-        _dims = self._embedding_adapter.dimensions() if self._embedding_adapter is not None else None
-        self._create_collection_fn = lambda c, w: create_collection_if_missing(
-            c, w, embedding_type=app_cfg.embedding.type, embedding_dims=_dims
-        )
         # Iniettabile nei test tramite override: engine._write_model_version_fn = mock_fn
         self._write_model_version_fn = _default_write_model_version
         # Effective id_field: for MySQL the authoritative value lives in source.mysql.query.id_field;
@@ -98,8 +91,8 @@ class SyncEngine:
 
         logger.info("Delta: %d record da upsertare, %d invariati", len(delta), skipped)
 
-        result = upsert_records(
-            self._client, delta, self._cfg.weaviate, self._cfg.source.type, self._embedding_adapter,
+        result = self._vector_store.index_records(
+            delta, self._cfg, self._cfg.source.type, self._embedding_adapter,
             id_field=self._id_field,
             on_batch_done=lambda bn, done, total: on_progress("embedding", done, total) if on_progress else None,
         )
@@ -124,7 +117,7 @@ class SyncEngine:
 
         # --- Checkpoint: resume o fresh start? -----------------------------------
         ckpt = checkpoint.read(collection_name)
-        collection_exists = self._client.collections.exists(collection_name)
+        collection_exists = self._vector_store.index_exists(collection_name)
         resuming = ckpt is not None and collection_exists
 
         if resuming:
@@ -146,8 +139,8 @@ class SyncEngine:
             start_from_batch = 0
             if collection_exists:
                 logger.info("Cancellazione collezione %r...", collection_name)
-                self._client.collections.delete(collection_name)
-            self._create_collection_fn(self._client, self._cfg.weaviate)
+                self._vector_store.drop_index(collection_name)
+            self._vector_store.create_index(self._cfg)
             self._state.clear()
             checkpoint.write(collection_name, last_completed_batch=-1)
         # -------------------------------------------------------------------------
@@ -162,8 +155,8 @@ class SyncEngine:
             if on_progress:
                 on_progress("embedding", done, total)
 
-        result = upsert_records(
-            self._client, records, self._cfg.weaviate, self._cfg.source.type, self._embedding_adapter,
+        result = self._vector_store.index_records(
+            records, self._cfg, self._cfg.source.type, self._embedding_adapter,
             id_field=self._id_field,
             start_from_batch=start_from_batch,
             on_batch_done=_on_batch_done,
