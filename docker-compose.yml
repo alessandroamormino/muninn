@@ -91,6 +91,7 @@ services:
   weaviate-ui:
     image: naaive/weaviate-ui:latest
     container_name: weaviate-ui
+    profiles: [weaviate]
     ports:
       - "7777:7777"
     environment:
