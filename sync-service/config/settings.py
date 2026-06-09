@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Resolve configuration/config.yaml relative to this file's location.
 # Inside the container: __file__ = /app/config/settings.py
@@ -144,11 +144,29 @@ class FtsConfig(BaseModel):
     """
     model_config = ConfigDict(extra="ignore")
     language: str = "en"
+    match_mode: Literal["and", "or"] = "and"  # Phase 23: AND/OR filter mode
+    use_omw: bool = False  # Phase 23: download OMW at sync time
 
 
 class VectorStoreConfig(BaseModel):
     collection: str = "Products"
-    text_fields: list[str] = Field(default_factory=list)
+    # Phase 23: text_fields accepts list[str] OR dict[str, float].
+    # list[str] → normalized to {field: 1.0 for field in list} by validator below.
+    # dict[str, float] → stored as-is (per-field BM25 boost weights).
+    text_fields: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("text_fields", mode="before")
+    @classmethod
+    def normalize_text_fields(cls, v: list | dict) -> dict:
+        """Normalize list[str] to dict[str, float] with equal weights 1.0.
+
+        Backward compat: existing list-format configs parse transparently.
+        (Pitfall 6: after this change, callers must NOT use text_fields[0];
+         use next(iter(text_fields)) or list(text_fields.keys())[0] instead.)
+        """
+        if isinstance(v, list):
+            return {f: 1.0 for f in v}
+        return v
     metadata_fields: list[str] = Field(default_factory=list)
     # Quantization: "none" | "pq" | "bq" | "sq"  (Phase 13.2 added "sq")
     # pq  = Product Quantization  -- ~32x RAM reduction, ~2-5% quality loss   (>100K records)
