@@ -19,7 +19,6 @@ from auth.user_store import UserRecord
 from config.settings import _CONFIG_PATH, load_config, settings
 from sync.engine import SyncEngine
 from sync.state_store import StateStore
-from weaviate_store import get_client
 
 # Reuse LLM pipeline — D-10 mandates no duplication
 from api.setup import (
@@ -156,7 +155,7 @@ def _write_config(
             "model":    settings.embedding.model,
             "endpoint": settings.embedding.endpoint,
         },
-        "weaviate": {
+        "vector_store": {
             "collection":      collection,
             "text_fields":     text_fields,
             "metadata_fields": metadata_fields,
@@ -217,7 +216,7 @@ def _run_upload_sync_bg(app_state, config_path: Path, collection_hint: str = "",
         collection_lower = temp_cfg.vector_store.collection.lower()
         # Per-entity StateStore: avoids wiping global sync_state.json (A3)
         temp_state = StateStore(Path("/app/.sync") / f"state_{collection_lower}.json")
-        engine = SyncEngine(temp_cfg, get_client(), temp_state)   # D-03/D-04
+        engine = SyncEngine(temp_cfg, app_state.vector_store, temp_state)  # D-03/D-04
         # Per-entity syncs must NOT overwrite the global model_version.json.
         # Each collection may use a different embedding model; the global file
         # tracks only the model for the default collection checked at startup.
