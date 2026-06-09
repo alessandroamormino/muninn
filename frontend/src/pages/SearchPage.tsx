@@ -4,6 +4,7 @@ import SearchBar from './search/SearchBar'
 import FilterBar from './search/FilterBar'
 import ResultCard from './search/ResultCard'
 import SearchModeSelector from './search/SearchModeSelector'
+import MatchModeToggle from './search/MatchModeToggle'
 import { useSearch } from '@/api/search'
 import { useEntityInfo } from '@/api/config'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -18,18 +19,25 @@ export default function SearchPage() {
   const [filter, setFilter] = useState<string>('')
   const [minScore, setMinScore] = useState<number | null>(null)
   const [searchMode, setSearchMode] = useState<string>('hybrid')
+  const [matchMode, setMatchMode] = useState<'and' | 'or'>('and')
   const [page, setPage] = useState(0)
 
   const { data: entityInfo } = useEntityInfo(collection)
   const configuredMode = entityInfo?.search_mode ?? 'hybrid'
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setSearchMode(configuredMode)
+    setMatchMode('and')
     setPage(0)
   }, [collection, configuredMode])
 
+  // Reset matchMode when leaving FTS mode
+  useEffect(() => { if (searchMode !== 'fts') setMatchMode('and') }, [searchMode])
+
   // Reset page when query changes
   useEffect(() => { setPage(0) }, [q, filter, minScore, searchMode])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const search = useSearch({
     q,
@@ -38,6 +46,7 @@ export default function SearchPage() {
     min_score: minScore,
     limit: FETCH_LIMIT,
     search_mode: entityInfo?.vector_store_engine === 'qdrant' ? searchMode : undefined,
+    match_mode: searchMode === 'fts' ? matchMode : null,
   })
 
   const allResults = search.data?.results ?? []
@@ -64,6 +73,7 @@ export default function SearchPage() {
         placeholder={collection ? `Search across ${collection}...` : 'Select a collection first'}
         onSubmit={setQ}
         disabled={!collection}
+        collection={collection}
       />
       <FilterBar
         filter={filter}
@@ -72,12 +82,21 @@ export default function SearchPage() {
       />
 
       {collection && entityInfo?.vector_store_engine === 'qdrant' && (
-        <SearchModeSelector
-          value={searchMode}
-          onChange={(m) => { setSearchMode(m); setPage(0) }}
-          disabled={search.isPending}
-          configuredMode={configuredMode}
-        />
+        <>
+          <SearchModeSelector
+            value={searchMode}
+            onChange={(m) => { setSearchMode(m); setPage(0) }}
+            disabled={search.isPending}
+            configuredMode={configuredMode}
+          />
+          {searchMode === 'fts' && (
+            <MatchModeToggle
+              value={matchMode}
+              onChange={(m) => { setMatchMode(m); setPage(0) }}
+              disabled={search.isPending}
+            />
+          )}
+        </>
       )}
 
       {!q && (
