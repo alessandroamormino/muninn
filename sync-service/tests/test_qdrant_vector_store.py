@@ -805,3 +805,164 @@ class TestMatchMode:
         # scroll was used (not query_points)
         assert mock_client.scroll.called
         assert not mock_client.query_points.called
+
+
+# ---------------------------------------------------------------------------
+# Phase 23: TestFuzzyVocab — _fuzzy_vocab populated after index_records
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace
+
+
+def _mock_point(fts_text: str):
+    p = SimpleNamespace()
+    p.payload = {"_fts_text": fts_text}
+    return p
+
+
+class TestFuzzyVocab:
+    def setup_method(self):
+        from vector_stores import qdrant_store
+        qdrant_store._fuzzy_vocab.clear()
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_index_records_fts_mode_populates_fuzzy_vocab(self, MockClient):
+        mock_client = MockClient.return_value
+        mock_client.scroll.return_value = ([_mock_point("hello world")], None)
+        store = _make_store(); store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0})
+        store.index_records([{"id": "1", "description": "hello world"}], cfg, "csv")
+        from vector_stores.qdrant_store import _fuzzy_vocab
+        assert isinstance(_fuzzy_vocab.get("TestCollection"), frozenset)
+        assert len(_fuzzy_vocab["TestCollection"]) > 0
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_index_records_bm25_mode_populates_fuzzy_vocab(self, MockClient):
+        mock_client = MockClient.return_value
+        mock_client.scroll.return_value = ([_mock_point("foo bar")], None)
+        store = _make_store(); store.open()
+        cfg = _make_cfg("bm25", text_fields={"description": 1.0})
+        store.index_records([{"id": "1", "description": "foo bar"}], cfg, "csv")
+        from vector_stores.qdrant_store import _fuzzy_vocab
+        assert isinstance(_fuzzy_vocab.get("TestCollection"), frozenset)
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_index_records_hybrid_mode_skips_fuzzy_vocab(self, MockClient):
+        mock_client = MockClient.return_value
+        store = _make_store(); store.open()
+        cfg = _make_cfg("hybrid", text_fields={"description": 1.0})
+        store.index_records([{"id": "1", "description": "test"}], cfg, "csv", embedding_adapter=None)
+        from vector_stores.qdrant_store import _fuzzy_vocab
+        assert _fuzzy_vocab.get("TestCollection") is None
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_fuzzy_vocab_tokenizes_on_whitespace_and_punctuation(self, MockClient):
+        mock_client = MockClient.return_value
+        mock_client.scroll.return_value = ([_mock_point("Tavolo, in legno!")], None)
+        store = _make_store(); store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0})
+        store.index_records([{"id": "1", "description": "Tavolo, in legno!"}], cfg, "csv")
+        from vector_stores.qdrant_store import _fuzzy_vocab
+        vocab = _fuzzy_vocab["TestCollection"]
+        assert "tavolo" in vocab
+        assert "in" in vocab
+        assert "legno" in vocab
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_fuzzy_vocab_capped_at_50k_tokens(self, MockClient):
+        from vector_stores.qdrant_store import _FUZZY_VOCAB_CAP
+        unique_words = " ".join(f"tok{i}" for i in range(_FUZZY_VOCAB_CAP + 1000))
+        mock_client = MockClient.return_value
+        mock_client.scroll.return_value = ([_mock_point(unique_words)], None)
+        store = _make_store(); store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0})
+        store.index_records([{"id": "1", "description": "test"}], cfg, "csv")
+        from vector_stores.qdrant_store import _fuzzy_vocab
+        assert len(_fuzzy_vocab["TestCollection"]) <= _FUZZY_VOCAB_CAP
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_fuzzy_vocab_scroll_error_leaves_vocab_unchanged(self, MockClient):
+        mock_client = MockClient.return_value
+        mock_client.scroll.side_effect = Exception("scroll error")
+        store = _make_store(); store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0})
+        from vector_stores import qdrant_store
+        qdrant_store._fuzzy_vocab["TestCollection"] = frozenset(["existing"])
+        store.index_records([{"id": "1", "description": "test"}], cfg, "csv")
+        assert qdrant_store._fuzzy_vocab.get("TestCollection") == frozenset(["existing"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 23: TestSynonymsPayload — _synonyms written at index time
+# ---------------------------------------------------------------------------
+
+class TestSynonymsPayload:
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_index_records_use_omw_true_writes_synonyms_payload(self, MockClient, monkeypatch):
+        monkeypatch.setattr("vector_stores.qdrant_store._get_omw_synonyms",
+                            lambda token, lang: ["sinonimo1"] if token == "tavolo" else [])
+        mock_client = MockClient.return_value
+        mock_client.scroll.return_value = ([], None)
+        store = _make_store(); store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0})
+        cfg.vector_store.fts.use_omw = True
+        cfg.vector_store.fts.language = "it"
+        store.index_records([{"id": "1", "description": "tavolo"}], cfg, "csv")
+        points = mock_client.upsert.call_args[1]["points"]
+        assert "_synonyms" in points[0].payload
+        assert "sinonimo1" in points[0].payload["_synonyms"]
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_index_records_use_omw_false_writes_empty_synonyms_list(self, MockClient):
+        mock_client = MockClient.return_value
+        mock_client.scroll.return_value = ([], None)
+        store = _make_store(); store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0})
+        cfg.vector_store.fts.use_omw = False
+        store.index_records([{"id": "1", "description": "tavolo"}], cfg, "csv")
+        points = mock_client.upsert.call_args[1]["points"]
+        assert "_synonyms" in points[0].payload
+        assert points[0].payload["_synonyms"] == []
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_synonyms_deduplicated_across_tokens(self, MockClient, monkeypatch):
+        monkeypatch.setattr("vector_stores.qdrant_store._get_omw_synonyms",
+                            lambda token, lang: ["comune"])
+        mock_client = MockClient.return_value
+        mock_client.scroll.return_value = ([], None)
+        store = _make_store(); store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0})
+        cfg.vector_store.fts.use_omw = True
+        cfg.vector_store.fts.language = "it"
+        store.index_records([{"id": "1", "description": "alfa beta"}], cfg, "csv")
+        points = mock_client.upsert.call_args[1]["points"]
+        syns = points[0].payload["_synonyms"]
+        assert syns.count("comune") == 1
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_synonyms_capped_at_50_total(self, MockClient, monkeypatch):
+        monkeypatch.setattr("vector_stores.qdrant_store._get_omw_synonyms",
+                            lambda token, lang: [f"syn{i}" for i in range(100)])
+        mock_client = MockClient.return_value
+        mock_client.scroll.return_value = ([], None)
+        store = _make_store(); store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0})
+        cfg.vector_store.fts.use_omw = True
+        cfg.vector_store.fts.language = "it"
+        store.index_records([{"id": "1", "description": "tok1 tok2 tok3"}], cfg, "csv")
+        points = mock_client.upsert.call_args[1]["points"]
+        assert len(points[0].payload["_synonyms"]) <= 50
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_synonyms_payload_skipped_for_hybrid_mode(self, MockClient, monkeypatch):
+        monkeypatch.setattr("vector_stores.qdrant_store._get_omw_synonyms",
+                            lambda token, lang: ["syn"])
+        mock_client = MockClient.return_value
+        store = _make_store(); store.open()
+        cfg = _make_cfg("hybrid", text_fields={"description": 1.0})
+        cfg.vector_store.fts.use_omw = True
+        store.index_records([{"id": "1", "description": "test"}], cfg, "csv", embedding_adapter=None)
+        if mock_client.upsert.called:
+            points = mock_client.upsert.call_args[1]["points"]
+            for p in points:
+                assert "_synonyms" not in (p.payload or {})
