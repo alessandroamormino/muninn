@@ -98,12 +98,12 @@ class TestCreateIndex:
         store = _make_store()
         store.open()
 
-        store.create_index(_make_cfg("bm25"))
+        store.create_index(_make_cfg("bm25", text_fields={"description": 1.0}))
 
         call_kwargs = mock_client.create_collection.call_args[1]
         # No dense vectors for bm25
         assert "dense" not in call_kwargs.get("vectors_config", {})
-        # Sparse present
+        # Sparse present (single-field → legacy "sparse" key)
         assert "sparse" in call_kwargs["sparse_vectors_config"]
         # _fts_text payload index
         assert mock_client.create_payload_index.called
@@ -116,7 +116,7 @@ class TestCreateIndex:
         store = _make_store()
         store.open()
 
-        store.create_index(_make_cfg("fts"))
+        store.create_index(_make_cfg("fts", text_fields={"description": 1.0}))
 
         call_kwargs = mock_client.create_collection.call_args[1]
         # No dense vector in fts mode
@@ -225,7 +225,7 @@ class TestSearch:
         store = _make_store()
         store.open()
 
-        store.search("query text", None, _make_cfg("bm25"), limit=5, mode="bm25")
+        store.search("query text", None, _make_cfg("bm25", text_fields={"description": 1.0}), limit=5, mode="bm25")
 
         call_kwargs = mock_client.query_points.call_args[1]
         assert call_kwargs.get("using") == "sparse"
@@ -243,10 +243,10 @@ class TestSearch:
         store = _make_store()
         store.open()
 
-        store.search("query text", None, _make_cfg("fts"), limit=5, mode="fts")
+        store.search("query text", None, _make_cfg("fts", text_fields={"description": 1.0}), limit=5, mode="fts")
 
         call_kwargs = mock_client.query_points.call_args[1]
-        # CRITICAL: must use sparse BM25, NOT MatchText filter
+        # CRITICAL: must use sparse BM25, NOT MatchText filter as the main query (PITFALL 1)
         assert call_kwargs.get("using") == "sparse"
         assert isinstance(call_kwargs.get("query"), qmodels.Document)
         # Must NOT pass a MatchText filter as the query
@@ -295,9 +295,10 @@ class TestSearch:
         assert qdrant_filter is not None
         assert isinstance(qdrant_filter, qmodels.Filter)
         must = qdrant_filter.must
-        assert len(must) == 1
-        assert must[0].key == "ruolo"
-        assert must[0].match.value == "Sviluppatore"
+        # match_mode pre-filter adds a _fts_text condition; equality filter also present
+        eq_conds = [c for c in must if hasattr(c, "key") and c.key == "ruolo"]
+        assert len(eq_conds) == 1
+        assert eq_conds[0].match.value == "Sviluppatore"
 
 
 # ---------------------------------------------------------------------------

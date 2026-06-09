@@ -26,6 +26,7 @@ Use campo as-is from parsed_filter_pairs.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from typing import Any, Callable
 
@@ -33,11 +34,21 @@ from qdrant_client import QdrantClient
 from qdrant_client import models as qmodels
 
 from vector_stores.base import BaseVectorStore, IndexResult, SearchHit, compute_record_uuid
+from vector_stores.synonyms import _get_omw_synonyms
 
 logger = logging.getLogger(__name__)
 
 _EMBED_BATCH_SIZE = 1000       # embedding modes: limited by Ollama throughput
 _FTS_UPSERT_BATCH_SIZE = 100  # fts/bm25: no embedding, larger batches = fewer round-trips
+
+# Phase 23: fuzzy expansion vocabulary, keyed by collection name.
+# Populated by index_records() in fts/bm25 modes via _fts_text scroll.
+# Capped at 50K tokens per collection. Consumed by api/search.py via
+# `from vector_stores.qdrant_store import _fuzzy_vocab`.
+_fuzzy_vocab: dict[str, frozenset[str]] = {}
+_FUZZY_VOCAB_CAP = 50_000
+_FUZZY_VOCAB_SCROLL_LIMIT = 10_000
+_SYNONYMS_PAYLOAD_CAP = 50
 
 # Maps ISO-639-1 lang codes to Qdrant SnowballLanguage enum attribute names
 _SNOWBALL_MAP: dict[str, str] = {
@@ -143,12 +154,24 @@ class QdrantVectorStore(BaseVectorStore):
                 distance=qmodels.Distance.COSINE,
             )
 
-        # Build sparse_vectors_config (BM25 sparse, for hybrid/bm25/fts modes)
+        # Build sparse_vectors_config (BM25 sparse, for hybrid/bm25/fts modes).
+        # Multi-sparse: >1 text_field → named sparse vectors per field (sparse_{field}).
+        # Single-field or hybrid: legacy "sparse" name for backward compat.
+        # NOTE: hybrid keeps single "sparse" slot — weighted multi-field RRF for
+        # hybrid is out of scope for Phase 23 (fts/bm25 modes only).
         sparse_cfg: dict | None = None
         if mode in ("hybrid", "bm25", "fts"):
-            sparse_cfg = {
-                "sparse": qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
-            }
+            text_fields_dict: dict[str, float] = cfg.vector_store.text_fields or {}
+            field_names = list(text_fields_dict.keys())
+            if mode in ("bm25", "fts") and len(field_names) > 1:
+                sparse_cfg = {
+                    f"sparse_{field}": qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
+                    for field in field_names
+                }
+            else:
+                sparse_cfg = {
+                    "sparse": qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
+                }
 
         self._client.create_collection(
             collection_name=collection,
@@ -156,8 +179,9 @@ class QdrantVectorStore(BaseVectorStore):
             sparse_vectors_config=sparse_cfg,
         )
         logger.info(
-            "QdrantVectorStore: created collection %r (mode=%r, dims=%s)",
+            "QdrantVectorStore: created collection %r (mode=%r, dims=%s, fields=%s)",
             collection, mode, dims if mode in ("hybrid", "vector") else "n/a",
+            list((cfg.vector_store.text_fields or {}).keys()),
         )
 
         # Create _fts_text payload index for stemming support (hybrid, bm25, fts)
@@ -223,12 +247,17 @@ class QdrantVectorStore(BaseVectorStore):
         if id_field is None:
             id_field = cfg.source.id_field
         collection = cfg.vector_store.collection
-        text_fields: list[str] = cfg.vector_store.text_fields or []
+        text_fields_cfg: dict[str, float] = cfg.vector_store.text_fields or {}
+        text_fields: list[str] = list(text_fields_cfg.keys())
+        use_multi_sparse = mode in ("bm25", "fts") and len(text_fields) > 1
 
         # ------------------------------------------------------------------ #
         # FAST PATH — fts / bm25: no embedding, parallel upsert             #
         # ------------------------------------------------------------------ #
         if mode in ("fts", "bm25"):
+            use_omw = bool(getattr(cfg.vector_store.fts, "use_omw", False))
+            fts_lang = getattr(cfg.vector_store.fts, "language", "en")
+
             # Build all PointStructs in a single Python pass (CPU only, no IO)
             all_points: list = []
             for record in records:
@@ -241,12 +270,39 @@ class QdrantVectorStore(BaseVectorStore):
                     str(record.get(f, "")) for f in text_fields if record.get(f)
                 )
                 payload["_fts_text"] = fts_text
+
+                # _synonyms payload (fts/bm25 modes only; empty list when use_omw=False)
+                synonyms_list: list[str] = []
+                if use_omw:
+                    seen_syns: set[str] = set()
+                    for field in text_fields:
+                        text = str(record.get(field, "")).lower()
+                        for token in re.findall(r"[\w]+", text):
+                            if len(synonyms_list) >= _SYNONYMS_PAYLOAD_CAP:
+                                break
+                            for lemma in _get_omw_synonyms(token, fts_lang):
+                                if lemma not in seen_syns:
+                                    seen_syns.add(lemma)
+                                    synonyms_list.append(lemma)
+                                    if len(synonyms_list) >= _SYNONYMS_PAYLOAD_CAP:
+                                        break
+                        if len(synonyms_list) >= _SYNONYMS_PAYLOAD_CAP:
+                            break
+                payload["_synonyms"] = synonyms_list
+
+                # Multi-sparse: per-field Documents; single-sparse: joined _fts_text
+                if use_multi_sparse:
+                    vector = {
+                        f"sparse_{field}": qmodels.Document(
+                            text=str(record.get(field, "")), model="Qdrant/bm25"
+                        )
+                        for field in text_fields if record.get(field) is not None
+                    }
+                else:
+                    vector = {"sparse": qmodels.Document(text=fts_text, model="Qdrant/bm25")}
+
                 all_points.append(
-                    qmodels.PointStruct(
-                        id=obj_uuid,
-                        payload=payload,
-                        vector={"sparse": qmodels.Document(text=fts_text, model="Qdrant/bm25")},
-                    )
+                    qmodels.PointStruct(id=obj_uuid, payload=payload, vector=vector)
                 )
 
             total = len(all_points)
@@ -273,6 +329,7 @@ class QdrantVectorStore(BaseVectorStore):
                 "QdrantVectorStore.index_records: upserted %d points to %r (mode=%r)",
                 inserted_count, collection, mode,
             )
+            self._build_fuzzy_vocab(collection)
             return IndexResult(inserted=inserted_count, updated=0, skipped=0)
 
         # ------------------------------------------------------------------ #
@@ -340,6 +397,7 @@ class QdrantVectorStore(BaseVectorStore):
             "QdrantVectorStore.index_records: upserted %d points to %r (mode=%r)",
             inserted, collection, mode,
         )
+        # Hybrid/vector mode: no fuzzy vocab (fts/bm25 specific)
         return IndexResult(inserted=inserted, updated=0, skipped=0)
 
     def search(
@@ -351,6 +409,7 @@ class QdrantVectorStore(BaseVectorStore):
         limit: int = 10,
         mode: str = "hybrid",
         must_not_text_terms: list[str] | None = None,
+        match_mode_override: str | None = None,
     ) -> list[SearchHit]:
         """Execute search using the appropriate Qdrant query API for search_mode.
 
@@ -387,6 +446,7 @@ class QdrantVectorStore(BaseVectorStore):
 
         # For fts/bm25 + negation: BM25 can't surface records that don't contain the
         # negated entity (they score 0), so use scroll with must_not payload filter instead.
+        # NOTE: must_not path skips the match_mode pre-filter (scroll handles filtering).
         if mode in ("fts", "bm25") and must_not_conditions:
             qdrant_filter = qmodels.Filter(
                 must=must_conditions or None,
@@ -399,6 +459,22 @@ class QdrantVectorStore(BaseVectorStore):
                 with_payload=True,
             )
             return [SearchHit(properties=p.payload or {}, score=1.0) for p in points]
+
+        # Inject AND/OR match_mode pre-filter for fts/bm25 modes (not hybrid, not scroll path).
+        # Resolve: query override > cfg.fts.match_mode > "and"
+        if mode in ("fts", "bm25"):
+            _resolved_match_mode = match_mode_override or getattr(
+                cfg.vector_store.fts, "match_mode", "and"
+            )
+            text_condition = qmodels.FieldCondition(
+                key="_fts_text",
+                match=(
+                    qmodels.MatchText(text=query)
+                    if _resolved_match_mode == "and"
+                    else qmodels.MatchTextAny(text_any=query)
+                ),
+            )
+            must_conditions = [text_condition] + (must_conditions or [])
 
         # NOTE: Qdrant does NOT lowercase first char (unlike Weaviate) — campo used as-is
         qdrant_filter = None
@@ -438,18 +514,71 @@ class QdrantVectorStore(BaseVectorStore):
             # CRITICAL: Use sparse BM25 query — NOT MatchText filter (PITFALL 1).
             # MatchText as a query_filter does NOT produce relevance scores.
             # BM25 sparse vector query via models.Document returns ranked results.
-            results = self._client.query_points(
-                collection_name=collection,
-                query=qmodels.Document(text=query, model="Qdrant/bm25"),
-                using="sparse",
-                limit=limit,
-                with_payload=True,
-                query_filter=qdrant_filter,
-            )
+            _tf_cfg: dict[str, float] = cfg.vector_store.text_fields or {}
+            _field_names = list(_tf_cfg.keys())
+            if len(_field_names) > 1:
+                # Multi-sparse: weighted RRF fusion across per-field sparse vectors.
+                # Use RrfQuery(rrf=Rrf(weights=[...])) — NOT FusionQuery (Pitfall 2).
+                # FusionQuery has no weights field; only RrfQuery supports per-prefetch weights.
+                _weights = [_tf_cfg[f] for f in _field_names]
+                results = self._client.query_points(
+                    collection_name=collection,
+                    prefetch=[
+                        qmodels.Prefetch(
+                            query=qmodels.Document(text=query, model="Qdrant/bm25"),
+                            using=f"sparse_{field}",
+                            limit=limit * 2,
+                        )
+                        for field in _field_names
+                    ],
+                    query=qmodels.RrfQuery(rrf=qmodels.Rrf(weights=_weights)),
+                    limit=limit,
+                    with_payload=True,
+                    query_filter=qdrant_filter,
+                )
+            else:
+                # Single-field (or empty): legacy single sparse vector path (backward compat)
+                results = self._client.query_points(
+                    collection_name=collection,
+                    query=qmodels.Document(text=query, model="Qdrant/bm25"),
+                    using="sparse",
+                    limit=limit,
+                    with_payload=True,
+                    query_filter=qdrant_filter,
+                )
         else:
             raise ValueError(f"Unknown search mode: {mode!r}. Supported: hybrid, vector, bm25, fts")
 
         return [SearchHit(properties=p.payload, score=p.score) for p in results.points]
+
+    def _build_fuzzy_vocab(self, collection: str) -> None:
+        """Build in-memory term vocabulary from _fts_text scroll for fuzzy expansion.
+
+        Capped at _FUZZY_VOCAB_CAP tokens. Stored in module-level _fuzzy_vocab dict.
+        Called after index_records in fts/bm25 modes. Gracefully no-ops on any error.
+        """
+        try:
+            points, _ = self._client.scroll(
+                collection_name=collection,
+                scroll_filter=None,
+                limit=_FUZZY_VOCAB_SCROLL_LIMIT,
+                with_payload=["_fts_text"],
+            )
+            tokens: set[str] = set()
+            for p in points:
+                text = (p.payload or {}).get("_fts_text", "")
+                for token in re.findall(r"[\w]+", text.lower()):
+                    tokens.add(token)
+                    if len(tokens) >= _FUZZY_VOCAB_CAP:
+                        break
+                if len(tokens) >= _FUZZY_VOCAB_CAP:
+                    break
+            _fuzzy_vocab[collection] = frozenset(tokens)
+            logger.info(
+                "fuzzy vocab built: %d tokens for %r", len(_fuzzy_vocab[collection]), collection
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("fuzzy vocab build failed for %r: %s", collection, exc)
 
     def count(self, collection_name: str) -> int | None:
         """Return total document count; None on error."""
