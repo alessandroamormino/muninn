@@ -7,6 +7,10 @@ import SearchModeSelector from './search/SearchModeSelector'
 import { useSearch } from '@/api/search'
 import { useEntityInfo } from '@/api/config'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Button } from '@/components/ui/button'
+
+const PAGE_SIZE = 10
+const FETCH_LIMIT = 100
 
 export default function SearchPage() {
   const [collection, setCollection] = useState<string | null>(null)
@@ -14,25 +18,36 @@ export default function SearchPage() {
   const [filter, setFilter] = useState<string>('')
   const [minScore, setMinScore] = useState<number | null>(null)
   const [searchMode, setSearchMode] = useState<string>('hybrid')
+  const [page, setPage] = useState(0)
 
   const { data: entityInfo } = useEntityInfo(collection)
+  const configuredMode = entityInfo?.search_mode ?? 'hybrid'
 
   useEffect(() => {
-    setSearchMode(entityInfo?.search_mode ?? 'hybrid')
-  }, [collection, entityInfo?.search_mode])
+    setSearchMode(configuredMode)
+    setPage(0)
+  }, [collection, configuredMode])
+
+  // Reset page when query changes
+  useEffect(() => { setPage(0) }, [q, filter, minScore, searchMode])
 
   const search = useSearch({
     q,
     collection,
     filter: filter || null,
     min_score: minScore,
+    limit: FETCH_LIMIT,
     search_mode: entityInfo?.vector_store_engine === 'qdrant' ? searchMode : undefined,
   })
+
+  const allResults = search.data?.results ?? []
+  const totalResults = allResults.length
+  const totalPages = Math.ceil(totalResults / PAGE_SIZE)
+  const pageResults = allResults.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
 
   const errMsg = (() => {
     const e = search.error as Error | undefined
     if (!e) return null
-    // 422 messages already contain server-side detail
     if (/HTTP 422/i.test(e.message)) {
       const match = e.message.match(/HTTP 422[^"]*?"detail":\s*"([^"]+)"/)
       return match ? match[1] : e.message
@@ -44,7 +59,7 @@ export default function SearchPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Search</h1>
-      <EntityDropdown value={collection} onChange={setCollection} />
+      <EntityDropdown value={collection} onChange={(c) => { setCollection(c); setPage(0) }} />
       <SearchBar
         placeholder={collection ? `Search across ${collection}...` : 'Select a collection first'}
         onSubmit={setQ}
@@ -59,8 +74,9 @@ export default function SearchPage() {
       {collection && entityInfo?.vector_store_engine === 'qdrant' && (
         <SearchModeSelector
           value={searchMode}
-          onChange={setSearchMode}
+          onChange={(m) => { setSearchMode(m); setPage(0) }}
           disabled={search.isPending}
+          configuredMode={configuredMode}
         />
       )}
 
@@ -84,10 +100,14 @@ export default function SearchPage() {
 
       {q && search.data && !errMsg && (
         <>
-          <div className="text-xs text-muted-foreground">
-            {search.data.results.length} results in {search.data.took_ms} ms
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>
+              {totalResults} results in {search.data.took_ms} ms
+              {totalPages > 1 && ` — page ${page + 1} of ${totalPages}`}
+            </span>
           </div>
-          {search.data.results.length === 0 ? (
+
+          {totalResults === 0 ? (
             <div className="text-center py-8">
               <h3 className="text-base font-semibold mb-1">No results found</h3>
               <p className="text-sm text-muted-foreground">
@@ -95,11 +115,37 @@ export default function SearchPage() {
               </p>
             </div>
           ) : (
-            <div className="space-y-3">
-              {search.data.results.map((r, i) => (
-                <ResultCard key={`${i}-${r._score}`} result={r} />
-              ))}
-            </div>
+            <>
+              <div className="space-y-3">
+                {pageResults.map((r, i) => (
+                  <ResultCard key={`${page}-${i}-${r._score}`} result={r} />
+                ))}
+              </div>
+
+              {totalPages > 1 && (
+                <div className="flex items-center justify-center gap-2 pt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    disabled={page === 0}
+                  >
+                    ← Prev
+                  </Button>
+                  <span className="text-xs text-muted-foreground px-2">
+                    {page + 1} / {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                    disabled={page >= totalPages - 1}
+                  >
+                    Next →
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </>
       )}

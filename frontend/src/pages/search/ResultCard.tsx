@@ -3,24 +3,37 @@ import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import type { SearchResult } from '@/api/search'
 
+const TITLE_FIELD_HINTS = ['description', 'descrizione', 'nome', 'name', 'title', 'titolo', 'label']
+const STATUS_FIELD_HINTS = ['status', 'stato']
+
+function pickTitle(props: Record<string, unknown>): [string, string] {
+  const keys = Object.keys(props)
+  const hint = keys.find((k) => TITLE_FIELD_HINTS.includes(k.toLowerCase()))
+  const key = hint ?? keys[0] ?? ''
+  const val = key ? String(props[key] ?? '—') : '—'
+  return [key, val || '—']
+}
+
+function formatValue(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '—'
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
+
 export default function ResultCard({ result }: { result: SearchResult }) {
   const [open, setOpen] = useState(false)
   const { _score, ...props } = result
 
-  // Case-insensitive field lookup (Weaviate lowercases the first letter)
-  const get = (field: string): string => {
-    const entry = Object.entries(props).find(([k]) => k.toLowerCase() === field.toLowerCase())
-    const v = entry?.[1]
-    if (v === null || v === undefined || v === '') return '—'
-    return String(v)
-  }
+  const [titleKey, titleVal] = pickTitle(props)
 
-  const nome = get('descrizione')
-  const azienda = get('azienda')
-  const sede = get('sede')
-  const stato = get('stato')
-  const jobTitle = get('job_title')
-  const isAttivo = stato.toLowerCase() === 'attivo'
+  const statusKey = Object.keys(props).find((k) =>
+    STATUS_FIELD_HINTS.includes(k.toLowerCase())
+  )
+  const statusVal = statusKey ? String(props[statusKey] ?? '').toLowerCase() : null
+
+  const secondaryEntries = Object.entries(props).filter(
+    ([k]) => k !== titleKey && k.toLowerCase() !== 'tags'
+  )
 
   return (
     <>
@@ -28,31 +41,31 @@ export default function ResultCard({ result }: { result: SearchResult }) {
         className="p-4 cursor-pointer hover:bg-accent/30 transition-colors select-none"
         onClick={() => setOpen(true)}
       >
-        {/* Title row */}
         <div className="flex items-start justify-between gap-4 mb-2">
-          <span className="font-semibold text-base leading-snug">{nome}</span>
+          <span className="font-semibold text-base leading-snug">{titleVal}</span>
           <Badge variant="secondary" className="font-mono text-xs flex-shrink-0">
             {Number(_score).toFixed(3)}
           </Badge>
         </div>
 
-        {/* Compact info row */}
         <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
-          {/* Status dot — green = Attivo, red = anything else */}
-          <span
-            className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${
-              isAttivo ? 'bg-green-500' : 'bg-red-500'
-            }`}
-            title={stato}
-            aria-label={`Stato: ${stato}`}
-          />
-          {azienda !== '—' && <span className="font-medium text-foreground/80">{azienda}</span>}
-          {sede !== '—' && <><span className="opacity-40">·</span><span>{sede}</span></>}
-          {jobTitle !== '—' && <><span className="opacity-40">·</span><span>{jobTitle}</span></>}
+          {statusKey && (
+            <span
+              className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${
+                statusVal === 'attivo' || statusVal === 'active' ? 'bg-green-500' : 'bg-red-500'
+              }`}
+              title={String(props[statusKey])}
+            />
+          )}
+          {secondaryEntries.slice(0, 3).map(([k, v], i) => (
+            <span key={k} className="flex items-center gap-2">
+              {i > 0 && <span className="opacity-40">·</span>}
+              <span className="text-foreground/80">{formatValue(v)}</span>
+            </span>
+          ))}
         </div>
       </Card>
 
-      {/* Detail modal */}
       {open && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
@@ -60,46 +73,37 @@ export default function ResultCard({ result }: { result: SearchResult }) {
         >
           <div
             className="relative bg-card rounded-2xl border shadow-2xl w-full max-w-lg max-h-[80vh] overflow-y-auto p-6 mx-4"
-            onClick={e => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
           >
-            {/* Modal header */}
             <div className="flex items-start gap-3 mb-5 pr-6">
-              <span
-                className={`mt-1 inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-                  isAttivo ? 'bg-green-500' : 'bg-red-500'
-                }`}
-                title={stato}
-              />
+              {statusKey && (
+                <span
+                  className={`mt-1 inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                    statusVal === 'attivo' || statusVal === 'active' ? 'bg-green-500' : 'bg-red-500'
+                  }`}
+                />
+              )}
               <div className="flex-1 min-w-0">
-                <h2 className="text-lg font-semibold leading-snug">{nome}</h2>
-                {azienda !== '—' && (
-                  <p className="text-sm text-muted-foreground mt-0.5">{azienda}{sede !== '—' ? ` · ${sede}` : ''}</p>
-                )}
+                <h2 className="text-lg font-semibold leading-snug">{titleVal}</h2>
               </div>
               <Badge variant="secondary" className="font-mono text-xs flex-shrink-0">
                 {Number(_score).toFixed(3)}
               </Badge>
             </div>
 
-            {/* All fields */}
-            <dl className="grid grid-cols-[minmax(100px,140px)_1fr] gap-x-4 gap-y-2 text-sm">
+            <dl className="space-y-3">
               {Object.entries(props)
-                .filter(([k]) => {
-                  const kl = k.toLowerCase()
-                  // skip fields already shown in header
-                  return kl !== 'descrizione' && kl !== 'azienda' && kl !== 'sede'
-                })
+                .filter(([k]) => k !== titleKey)
                 .map(([k, v]) => (
-                  <div className="contents" key={k}>
-                    <dt className="text-muted-foreground text-xs uppercase tracking-wider truncate self-start pt-0.5" title={k}>
-                      {k}
+                  <div key={k}>
+                    <dt className="text-muted-foreground text-[10px] uppercase tracking-wider mb-0.5">
+                      {k.replace(/_/g, ' ')}
                     </dt>
-                    <dd className="break-words">{formatValue(v)}</dd>
+                    <dd className="text-sm break-words">{formatValue(v)}</dd>
                   </div>
                 ))}
             </dl>
 
-            {/* Close button */}
             <button
               onClick={() => setOpen(false)}
               className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors text-lg leading-none"
@@ -112,11 +116,4 @@ export default function ResultCard({ result }: { result: SearchResult }) {
       )}
     </>
   )
-}
-
-function formatValue(v: unknown): string {
-  if (v === null || v === undefined) return '—'
-  if (typeof v === 'object') return JSON.stringify(v)
-  const s = String(v)
-  return s === '' ? '—' : s
 }

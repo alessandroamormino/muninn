@@ -30,10 +30,12 @@ export default function EntityInfoPanel({ collection }: { collection: string }) 
           <dt className="text-muted-foreground text-xs">Total objects</dt>
           <dd className="text-sm font-semibold">{info?.total_objects ?? '—'}</dd>
         </div>
-        <div>
-          <dt className="text-muted-foreground text-xs">Model</dt>
-          <dd className="text-sm font-semibold">{info?.embedding_model ?? '—'}</dd>
-        </div>
+        {info?.search_mode !== 'fts' && info?.search_mode !== 'bm25' && (
+          <div>
+            <dt className="text-muted-foreground text-xs">Model</dt>
+            <dd className="text-sm font-semibold">{info?.embedding_model ?? '—'}</dd>
+          </div>
+        )}
         <div>
           <dt className="text-muted-foreground text-xs">Source type</dt>
           <dd className="text-sm font-semibold">{info?.sync_mode ?? '—'}</dd>

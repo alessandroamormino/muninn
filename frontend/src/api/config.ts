@@ -98,6 +98,7 @@ export interface CreateConfigPayload {
   text_fields: string[]
   metadata_fields: string[]
   output_fields: string[]
+  search_mode: string
 }
 
 export function useCreateConfig() {

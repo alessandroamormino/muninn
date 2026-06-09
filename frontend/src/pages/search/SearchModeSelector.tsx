@@ -1,19 +1,37 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
-const QDRANT_MODES = [
+const ALL_MODES = [
   { value: 'hybrid', label: 'Hybrid (BM25 + semantico)' },
   { value: 'vector', label: 'Vector (solo semantico)' },
   { value: 'bm25', label: 'BM25 (solo keyword)' },
   { value: 'fts', label: 'FTS (full-text con stemming)' },
 ]
 
+// Modes available per configured search_mode.
+// fts/bm25/vector → single mode, selector hidden by caller.
+// hybrid → all modes available (both vectors and sparse index exist).
+const AVAILABLE: Record<string, string[]> = {
+  hybrid: ['hybrid', 'vector', 'bm25', 'fts'],
+  vector: ['vector'],
+  bm25:   ['bm25'],
+  fts:    ['fts'],
+}
+
 interface Props {
   value: string
   onChange: (mode: string) => void
   disabled?: boolean
+  configuredMode: string
 }
 
-export default function SearchModeSelector({ value, onChange, disabled }: Props) {
+export default function SearchModeSelector({ value, onChange, disabled, configuredMode }: Props) {
+  const available = AVAILABLE[configuredMode] ?? ['hybrid', 'vector', 'bm25', 'fts']
+
+  // Only show selector when there's actually a choice to make
+  if (available.length <= 1) return null
+
+  const modes = ALL_MODES.filter((m) => available.includes(m.value))
+
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs text-muted-foreground whitespace-nowrap">Modalità:</span>
@@ -22,7 +40,7 @@ export default function SearchModeSelector({ value, onChange, disabled }: Props)
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {QDRANT_MODES.map((m) => (
+          {modes.map((m) => (
             <SelectItem key={m.value} value={m.value}>
               {m.label}
             </SelectItem>

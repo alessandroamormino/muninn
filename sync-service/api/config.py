@@ -45,6 +45,7 @@ class CreateConfigRequest(BaseModel):
     text_fields: list[str]
     metadata_fields: list[str] = []
     output_fields: list[str] = []
+    search_mode: str = "hybrid"
 
 
 # ---------------------------------------------------------------------------
@@ -143,18 +144,21 @@ async def create_config(
         )
 
     # Build MySQL source dict with ${VAR} placeholders (D-19/D-20)
+    # Fields nested under source.mysql as expected by MySQLConfig/SourceConfig
     source: dict = {
         "type": "mysql",
-        "host": f"${{{body.host_env_var}}}",
-        "port": body.port,
-        "database": f"${{{body.db_env_var}}}",
-        "user": f"${{{body.user_env_var}}}",
-        "password": f"${{{body.password_env_var}}}",
-        "query": {
-            "from": body.from_table,
-            "fields": body.fields,
-            "id_field": body.id_field,
-            "hash_fields": body.fields,
+        "mysql": {
+            "host": f"${{{body.host_env_var}}}",
+            "port": body.port,
+            "database": f"${{{body.db_env_var}}}",
+            "user": f"${{{body.user_env_var}}}",
+            "password": f"${{{body.password_env_var}}}",
+            "query": {
+                "from": body.from_table,
+                "fields": body.fields,
+                "id_field": body.id_field,
+                "hash_fields": body.fields,
+            },
         },
     }
 
@@ -165,6 +169,7 @@ async def create_config(
         metadata_fields=body.metadata_fields,
         output_fields=body.output_fields,
         id_field=body.id_field,
+        search_mode=body.search_mode,
     )
 
     return {"collection": body.collection}

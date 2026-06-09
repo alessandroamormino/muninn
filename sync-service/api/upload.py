@@ -140,6 +140,7 @@ def _write_config(
     metadata_fields: list[str],
     output_fields: list[str],
     id_field: str,
+    search_mode: str = "hybrid",
 ) -> Path:
     """Write per-entity config.yaml. Creates directory if needed. D-01/D-02.
 
@@ -148,28 +149,28 @@ def _write_config(
     config_dir = _CONFIG_ROOT / collection   # WR-04: use resolved root, not hardcoded /app/configuration
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.yaml"
-    cfg_dict = {
-        "source": source,
-        "embedding": {
+    cfg_dict: dict = {"source": source}
+    if search_mode not in ("fts", "bm25"):
+        cfg_dict["embedding"] = {
             "type":     settings.embedding.type,
             "model":    settings.embedding.model,
             "endpoint": settings.embedding.endpoint,
-        },
-        "vector_store": {
-            "collection":      collection,
-            "text_fields":     text_fields,
-            "metadata_fields": metadata_fields,
-        },
-        "sync": {
-            "mode":        "full",
-            "hash_fields": [id_field],
-            "schedule":    "manual",
-        },
-        "api": {
-            "output_fields":  output_fields,
-            "default_limit":  settings.api.default_limit,
-            "max_limit":      settings.api.max_limit,
-        },
+        }
+    cfg_dict["vector_store"] = {
+        "collection":      collection,
+        "search_mode":     search_mode,
+        "text_fields":     text_fields,
+        "metadata_fields": metadata_fields,
+    }
+    cfg_dict["sync"] = {
+        "mode":        "full",
+        "hash_fields": [id_field],
+        "schedule":    "manual",
+    }
+    cfg_dict["api"] = {
+        "output_fields":  output_fields,
+        "default_limit":  settings.api.default_limit,
+        "max_limit":      settings.api.max_limit,
     }
     config_path.write_text(yaml.dump(cfg_dict, default_flow_style=False), encoding="utf-8")
     return config_path

@@ -11,11 +11,143 @@ import SuggestConfigButton from './SuggestConfigButton'
 const ENTITY_NAME_RE = /^[A-Za-z][A-Za-z0-9]*$/
 const UPPERCASE_RE = /^[A-Z][A-Z0-9_]*$/
 
+// ── Search mode definitions ───────────────────────────────────────────────────
+
+interface SearchModeInfo {
+  value: SearchMode
+  icon: string
+  label: string
+  tagline: string
+  requiresEmbedding: boolean
+  detail: string
+  examples: string[]
+}
+
+const SEARCH_MODE_DEFS: SearchModeInfo[] = [
+  {
+    value: 'hybrid',
+    icon: '⚡',
+    label: 'Hybrid',
+    tagline: 'BM25 + Semantic',
+    requiresEmbedding: true,
+    detail: 'Combina ricerca per parole chiave (BM25) e ricerca semantica (vettori). Trova sia corrispondenze esatte che concetti simili. Richiede un modello di embedding.',
+    examples: ['"pompa centrifuga" trova anche "pompe a girante" e "WILO CM5"'],
+  },
+  {
+    value: 'fts',
+    icon: '🔤',
+    label: 'Full-text',
+    tagline: 'Solo keyword, no embedding',
+    requiresEmbedding: false,
+    detail: 'Ricerca testuale pura con stemming e IDF. Velocissima su dataset grandi, nessun modello AI richiesto. Ideale per codici articolo, descrizioni brevi, cataloghi prodotti.',
+    examples: ['"geberit mapress" trova tutti i prodotti Geberit Mapress', '"21805" trova il codice articolo esatto'],
+  },
+  {
+    value: 'bm25',
+    icon: '📊',
+    label: 'BM25',
+    tagline: 'Sparse vector, no embedding',
+    requiresEmbedding: false,
+    detail: 'BM25 puro tramite vettori sparsi Qdrant. Simile a FTS ma senza stemming linguistico. Ottimo per testi tecnici e codici dove lo stemming potrebbe alterare i risultati.',
+    examples: ['"SIPARIO D=56" trova corrispondenze esatte senza modificare i termini'],
+  },
+  {
+    value: 'vector',
+    icon: '🧠',
+    label: 'Semantic',
+    tagline: 'Solo embedding',
+    requiresEmbedding: true,
+    detail: 'Ricerca puramente semantica tramite vettori densi. Trova concetti simili anche con parole diverse. Richiede embedding. Può perdere corrispondenze esatte su codici.',
+    examples: ['"illuminazione da soffitto" trova "plafoniera LED" anche senza parole in comune'],
+  },
+]
+
+// ── SearchModeCard ────────────────────────────────────────────────────────────
+
+function SearchModeCard({
+  def,
+  selected,
+  onSelect,
+}: {
+  def: SearchModeInfo
+  selected: boolean
+  onSelect: () => void
+}) {
+  const [showInfo, setShowInfo] = useState(false)
+
+  return (
+    <>
+      <div
+        onClick={onSelect}
+        className={[
+          'relative cursor-pointer rounded-lg border p-3 transition-all',
+          selected
+            ? 'border-primary bg-primary/5 ring-1 ring-primary'
+            : 'border-border hover:border-muted-foreground/40 hover:bg-muted/30',
+        ].join(' ')}
+      >
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setShowInfo(true) }}
+          className="absolute top-2 right-2 text-muted-foreground hover:text-foreground text-xs leading-none"
+          title="Maggiori info"
+        >
+          ⓘ
+        </button>
+        <div className="text-2xl mb-1">{def.icon}</div>
+        <div className="text-sm font-semibold leading-tight">{def.label}</div>
+        <div className="text-xs text-muted-foreground mt-0.5">{def.tagline}</div>
+        {!def.requiresEmbedding && (
+          <span className="mt-1.5 inline-block text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5">
+            no embedding
+          </span>
+        )}
+      </div>
+
+      {showInfo && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setShowInfo(false)}
+        >
+          <div
+            className="bg-background rounded-xl shadow-xl max-w-sm w-full p-5 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">{def.icon}</span>
+              <div>
+                <div className="font-semibold">{def.label}</div>
+                <div className="text-xs text-muted-foreground">{def.tagline}</div>
+              </div>
+            </div>
+            <p className="text-sm text-muted-foreground">{def.detail}</p>
+            <div>
+              <div className="text-xs font-medium mb-1">Esempi</div>
+              <ul className="space-y-1">
+                {def.examples.map((ex) => (
+                  <li key={ex} className="text-xs text-muted-foreground bg-muted rounded px-2 py-1 font-mono">
+                    {ex}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <Button size="sm" variant="outline" className="w-full" onClick={() => setShowInfo(false)}>
+              Chiudi
+            </Button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 // ── Step type ─────────────────────────────────────────────────────────────────
 
 type Step = 1 | 2 | 3
 
 // ── Form state interface ──────────────────────────────────────────────────────
+
+type SearchMode = 'fts' | 'bm25' | 'hybrid' | 'vector'
 
 interface MySQLWizardForm {
   collection: string
@@ -30,6 +162,7 @@ interface MySQLWizardForm {
   textFields: string[]
   metadataFields: string[]
   outputFields: string[]
+  searchMode: SearchMode
 }
 
 const INITIAL_FORM: MySQLWizardForm = {
@@ -45,6 +178,7 @@ const INITIAL_FORM: MySQLWizardForm = {
   textFields: [],
   metadataFields: [],
   outputFields: [],
+  searchMode: 'hybrid',
 }
 
 // ── Inner helper components ───────────────────────────────────────────────────
@@ -145,6 +279,7 @@ export default function MySQLWizard({ onDone, onCancel }: Props) {
       text_fields: form.textFields,
       metadata_fields: form.metadataFields,
       output_fields: form.outputFields,
+      search_mode: form.searchMode,
     }
     try {
       const r = await create.mutateAsync(payload)
@@ -260,7 +395,7 @@ export default function MySQLWizard({ onDone, onCancel }: Props) {
             placeholder="id"
           />
           <ListField
-            label="Fields (comma-separated)"
+            label="Fields"
             value={form.fields}
             onChange={(v) => setForm({ ...form, fields: v })}
           />
@@ -269,6 +404,20 @@ export default function MySQLWizard({ onDone, onCancel }: Props) {
               ID field must be one of the listed fields.
             </p>
           )}
+          <div className="block text-sm">
+            <span className="text-muted-foreground">Search mode</span>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {SEARCH_MODE_DEFS.map((def) => (
+                <SearchModeCard
+                  key={def.value}
+                  def={def}
+                  selected={form.searchMode === def.value}
+                  onSelect={() => setForm({ ...form, searchMode: def.value })}
+                />
+              ))}
+            </div>
+          </div>
+
           <div className="space-y-2">
             <ListField
               label="Text fields"
