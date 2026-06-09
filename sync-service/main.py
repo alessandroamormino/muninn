@@ -113,6 +113,15 @@ async def lifespan(app: FastAPI):
     logger.info("CacheAdapter ready (mode=%r, ttl=%ds)", settings.api.cache_mode, settings.api.cache_ttl_seconds)
     app.state.vector_store = vector_store
     app.state.sync_engine = SyncEngine(settings, vector_store, state_store, cache_store=cache_store)
+
+    # Rebuild fuzzy vocab for all fts/bm25 Qdrant collections on startup (vocab is in-memory only).
+    if engine == "qdrant" and hasattr(vector_store, "_build_fuzzy_vocab"):
+        for _cfg in _entity_configs:
+            _mode = getattr(_cfg.vector_store, "search_mode", "hybrid")
+            if _mode in ("fts", "bm25"):
+                _coll = _cfg.vector_store.collection
+                logger.info("Rebuilding fuzzy vocab for %r at startup...", _coll)
+                vector_store._build_fuzzy_vocab(_coll)
     app.state.sync_lock = threading.Lock()
     app.state.sync_status = {"status": "idle", "last_run": None}
     app.state.sync_progress = None  # populated during active sync, cleared on completion
