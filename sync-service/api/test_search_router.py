@@ -236,8 +236,13 @@ def test_search_returns_503_when_get_client_fails():
 # Search mode / vector behaviour (D-12)
 # ---------------------------------------------------------------------------
 
-def test_search_hybrid_called_with_alpha():
+def test_search_hybrid_called_with_alpha(monkeypatch):
     """vs.search() is called with mode='hybrid' by default (alpha is an impl detail of WeaviateVectorStore)."""
+    import api.search as search_mod
+    from config.settings import AppConfig
+    cfg = AppConfig()
+    cfg.vector_store.search_mode = "hybrid"
+    monkeypatch.setattr(search_mod, "settings", cfg)
     vs = _make_mock_vs()
     app = _make_app()
     app.state.vector_store = vs
@@ -245,8 +250,13 @@ def test_search_hybrid_called_with_alpha():
     assert vs.search.call_args.kwargs.get("mode") == "hybrid"
 
 
-def test_search_hybrid_with_embedding_passes_vector():
+def test_search_hybrid_with_embedding_passes_vector(monkeypatch):
     """With embedding_adapter, vs.search() receives non-None query_vector."""
+    import api.search as search_mod
+    from config.settings import AppConfig
+    cfg = AppConfig()
+    cfg.vector_store.search_mode = "hybrid"
+    monkeypatch.setattr(search_mod, "settings", cfg)
     adapter = MagicMock()
     adapter.embed.return_value = [[0.1] * 10]
     vs = _make_mock_vs()

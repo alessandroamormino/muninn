@@ -340,6 +340,56 @@ class TestIndexRecords:
         embedding_adapter.embed.assert_not_called()
 
     @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_index_records_fts_calls_on_batch_done(self, MockClient):
+        """fts mode: on_batch_done called for each parallel batch; total equals record count."""
+        mock_client = MockClient.return_value
+        mock_client.collection_exists.return_value = True
+        store = _make_store()
+        store.open()
+
+        records = [{"id": str(i), "name": f"rec{i}"} for i in range(3)]
+        progress_calls = []
+        store.index_records(
+            records, _make_cfg("fts"), "csv",
+            on_batch_done=lambda bn, done, total: progress_calls.append((done, total)),
+        )
+
+        assert len(progress_calls) >= 1
+        assert progress_calls[-1][1] == 3  # total == 3
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_index_records_bm25_calls_on_batch_done(self, MockClient):
+        """bm25 mode: on_batch_done called for each parallel batch; total equals record count."""
+        mock_client = MockClient.return_value
+        mock_client.collection_exists.return_value = True
+        store = _make_store()
+        store.open()
+
+        records = [{"id": str(i), "name": f"rec{i}"} for i in range(5)]
+        progress_calls = []
+        store.index_records(
+            records, _make_cfg("bm25"), "csv",
+            on_batch_done=lambda bn, done, total: progress_calls.append((done, total)),
+        )
+
+        assert len(progress_calls) >= 1
+        assert progress_calls[-1][1] == 5
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_index_records_bm25_skips_embedding(self, MockClient):
+        """bm25 mode: embedding_adapter.embed() is NEVER called (sparse BM25 only)."""
+        mock_client = MockClient.return_value
+        mock_client.collection_exists.return_value = True
+        embedding_adapter = MagicMock()
+        store = _make_store()
+        store.open()
+
+        records = [{"id": "1", "name": "Mario", "description": "Test"}]
+        store.index_records(records, _make_cfg("bm25"), "csv", embedding_adapter=embedding_adapter)
+
+        embedding_adapter.embed.assert_not_called()
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
     def test_index_records_stores_fts_text(self, MockClient):
         """_fts_text field is included in PointStruct payload for all modes."""
         mock_client = MockClient.return_value

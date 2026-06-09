@@ -15,6 +15,13 @@ from api.upload import router
 
 def _make_app(lock: bool = False, log_store=None) -> FastAPI:
     """Create a minimal FastAPI app with upload_router and required app.state fields."""
+    from auth.dependencies import require_admin, get_current_user
+    from auth.user_store import UserRecord
+    _ADMIN = UserRecord(
+        id=1, username="admin", hashed_password="", role="admin",
+        totp_secret=None, totp_enabled=False,
+        created_at="2026-01-01T00:00:00", is_active=True,
+    )
     app = FastAPI()
     app.include_router(router)
     lk = threading.Lock()
@@ -24,6 +31,9 @@ def _make_app(lock: bool = False, log_store=None) -> FastAPI:
     app.state.sync_status = {"status": "idle", "last_run": None}
     app.state.upload_status = None
     app.state.log_store = log_store
+    app.state.vector_store = MagicMock()
+    app.dependency_overrides[require_admin] = lambda: _ADMIN
+    app.dependency_overrides[get_current_user] = lambda: _ADMIN
     return app
 
 
@@ -170,7 +180,6 @@ def test_confirm_lock_released_after_sync(tmp_path):
         patch("api.upload.load_config") as mock_load,
         patch("api.upload.StateStore") as mock_ss,
         patch("api.upload.SyncEngine") as mock_engine_cls,
-        patch("api.upload.get_client"),
     ):
         mock_write.return_value = tmp_path / "config.yaml"
         mock_cfg = MagicMock()
@@ -244,7 +253,6 @@ def test_confirm_logs_full_type(tmp_path):
         patch("api.upload.load_config") as mock_load,
         patch("api.upload.StateStore"),
         patch("api.upload.SyncEngine") as mock_engine_cls,
-        patch("api.upload.get_client"),
     ):
         mock_write.return_value = tmp_path / "config.yaml"
         mock_cfg = MagicMock()
