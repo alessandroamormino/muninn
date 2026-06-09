@@ -23,13 +23,19 @@ from qdrant_client import models as qmodels
 # ---------------------------------------------------------------------------
 
 def _make_cfg(search_mode: str = "hybrid", collection: str = "TestCollection",
-              text_fields: list | None = None, fts_language: str = "en"):
+              text_fields: dict | list | None = None, fts_language: str = "en",
+              match_mode: str = "and"):
     cfg = MagicMock()
     cfg.vector_store.collection = collection
     cfg.vector_store.search_mode = search_mode
-    cfg.vector_store.text_fields = text_fields or ["name", "description"]
+    # Accept list for backward compat in tests, normalize to dict
+    tf = text_fields if text_fields is not None else {"name": 1.0, "description": 1.0}
+    if isinstance(tf, list):
+        tf = {f: 1.0 for f in tf}
+    cfg.vector_store.text_fields = tf
     cfg.vector_store.metadata_fields = ["ruolo"]
     cfg.vector_store.fts.language = fts_language
+    cfg.vector_store.fts.match_mode = match_mode
     cfg.source.id_field = "id"
     return cfg
 
@@ -533,3 +539,268 @@ class TestLifecycle:
         store.open()
         store.drop_index("NonExistent")
         mock_client.delete_collection.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Phase 23: TestFieldWeights — multi-sparse schema + per-field upsert + RRF
+# ---------------------------------------------------------------------------
+
+class TestFieldWeights:
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_multi_sparse_schema_created_for_two_fields(self, MockClient):
+        """2 text_fields → sparse_description + sparse_tags in schema (not 'sparse')."""
+        mock_client = MockClient.return_value
+        mock_client.collection_exists.return_value = False
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0, "tags": 0.5})
+
+        store.create_index(cfg)
+
+        call_kwargs = mock_client.create_collection.call_args[1]
+        sparse = call_kwargs["sparse_vectors_config"]
+        assert "sparse_description" in sparse
+        assert "sparse_tags" in sparse
+        assert "sparse" not in sparse  # legacy single-name must NOT appear
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_single_field_keeps_legacy_sparse_name(self, MockClient):
+        """1 text_field → schema uses legacy 'sparse' name (backward compat)."""
+        mock_client = MockClient.return_value
+        mock_client.collection_exists.return_value = False
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0})
+
+        store.create_index(cfg)
+
+        call_kwargs = mock_client.create_collection.call_args[1]
+        sparse = call_kwargs["sparse_vectors_config"]
+        assert "sparse" in sparse
+        assert "sparse_description" not in sparse
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_empty_text_fields_keeps_legacy_sparse_name(self, MockClient):
+        """Empty text_fields dict → schema uses legacy 'sparse' (safe no-op)."""
+        mock_client = MockClient.return_value
+        mock_client.collection_exists.return_value = False
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("fts", text_fields={})
+
+        store.create_index(cfg)
+
+        call_kwargs = mock_client.create_collection.call_args[1]
+        sparse = call_kwargs["sparse_vectors_config"]
+        assert "sparse" in sparse
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_multi_sparse_index_records_writes_per_field_documents(self, MockClient):
+        """index_records with 2 text_fields → upsert points have sparse_description + sparse_tags vectors."""
+        mock_client = MockClient.return_value
+        mock_client.collection_exists.return_value = True
+        # Mock scroll for vocab build (called after index_records in fts mode)
+        mock_client.scroll.return_value = ([], None)
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0, "tags": 0.5})
+        records = [{"id": "1", "description": "tavolo in legno", "tags": "mobili"}]
+
+        store.index_records(records, cfg, "csv")
+
+        assert mock_client.upsert.called
+        upsert_kwargs = mock_client.upsert.call_args[1]
+        points = upsert_kwargs["points"]
+        assert len(points) == 1
+        vec = points[0].vector
+        assert "sparse_description" in vec
+        assert "sparse_tags" in vec
+        assert "sparse" not in vec
+        assert isinstance(vec["sparse_description"], qmodels.Document)
+        assert isinstance(vec["sparse_tags"], qmodels.Document)
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_single_sparse_index_records_uses_joined_fts_text(self, MockClient):
+        """Single text_field → index_records uses 'sparse' key with joined _fts_text (backward compat)."""
+        mock_client = MockClient.return_value
+        mock_client.collection_exists.return_value = True
+        mock_client.scroll.return_value = ([], None)
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("fts", text_fields={"description": 1.0})
+        records = [{"id": "1", "description": "tavolo in legno"}]
+
+        store.index_records(records, cfg, "csv")
+
+        upsert_kwargs = mock_client.upsert.call_args[1]
+        points = upsert_kwargs["points"]
+        vec = points[0].vector
+        assert "sparse" in vec
+        assert "sparse_description" not in vec
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_search_multi_field_uses_rrf_query_with_weights(self, MockClient):
+        """Multi-field BM25 search uses RrfQuery(rrf=Rrf(weights=[...])) — NOT FusionQuery (Pitfall 2)."""
+        mock_client = MockClient.return_value
+        mock_results = MagicMock()
+        mock_results.points = []
+        mock_client.query_points.return_value = mock_results
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("bm25", text_fields={"description": 1.0, "tags": 0.5})
+
+        store.search("query text", None, cfg, limit=5, mode="bm25")
+
+        call_kwargs = mock_client.query_points.call_args[1]
+        assert "prefetch" in call_kwargs
+        assert len(call_kwargs["prefetch"]) == 2
+        assert isinstance(call_kwargs["query"], qmodels.RrfQuery)
+        assert call_kwargs["query"].rrf.weights == [1.0, 0.5]
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_search_single_field_uses_legacy_fusion_query(self, MockClient):
+        """Single-field BM25 search uses Document + using='sparse' (no RRF, backward compat)."""
+        mock_client = MockClient.return_value
+        mock_results = MagicMock()
+        mock_results.points = []
+        mock_client.query_points.return_value = mock_results
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("bm25", text_fields={"description": 1.0})
+
+        store.search("query text", None, cfg, limit=5, mode="bm25")
+
+        call_kwargs = mock_client.query_points.call_args[1]
+        assert call_kwargs.get("using") == "sparse"
+        assert isinstance(call_kwargs.get("query"), qmodels.Document)
+        assert "prefetch" not in call_kwargs
+
+
+# ---------------------------------------------------------------------------
+# Phase 23: TestMatchMode — AND/OR match mode filter on _fts_text
+# ---------------------------------------------------------------------------
+
+class TestMatchMode:
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_search_fts_and_adds_match_text_filter(self, MockClient):
+        """fts mode + match_mode='and' → FieldCondition with MatchText in query_filter.must."""
+        mock_client = MockClient.return_value
+        mock_results = MagicMock()
+        mock_results.points = []
+        mock_client.query_points.return_value = mock_results
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("fts", match_mode="and")
+
+        store.search("hello world", None, cfg, limit=5, mode="fts")
+
+        call_kwargs = mock_client.query_points.call_args[1]
+        qdrant_filter = call_kwargs.get("query_filter")
+        assert qdrant_filter is not None
+        must = qdrant_filter.must
+        fts_conds = [c for c in must if hasattr(c, "key") and c.key == "_fts_text"]
+        assert len(fts_conds) == 1
+        assert isinstance(fts_conds[0].match, qmodels.MatchText)
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_search_fts_or_adds_match_text_any_filter(self, MockClient):
+        """fts mode + match_mode='or' → FieldCondition with MatchTextAny in query_filter.must."""
+        mock_client = MockClient.return_value
+        mock_results = MagicMock()
+        mock_results.points = []
+        mock_client.query_points.return_value = mock_results
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("fts", match_mode="or")
+
+        store.search("hello world", None, cfg, limit=5, mode="fts")
+
+        call_kwargs = mock_client.query_points.call_args[1]
+        qdrant_filter = call_kwargs.get("query_filter")
+        assert qdrant_filter is not None
+        must = qdrant_filter.must
+        fts_conds = [c for c in must if hasattr(c, "key") and c.key == "_fts_text"]
+        assert len(fts_conds) == 1
+        assert isinstance(fts_conds[0].match, qmodels.MatchTextAny)
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_search_match_mode_override_param_wins(self, MockClient):
+        """match_mode_override='or' wins over cfg match_mode='and'."""
+        mock_client = MockClient.return_value
+        mock_results = MagicMock()
+        mock_results.points = []
+        mock_client.query_points.return_value = mock_results
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("fts", match_mode="and")
+
+        store.search("hello world", None, cfg, limit=5, mode="fts", match_mode_override="or")
+
+        call_kwargs = mock_client.query_points.call_args[1]
+        qdrant_filter = call_kwargs.get("query_filter")
+        must = qdrant_filter.must
+        fts_conds = [c for c in must if hasattr(c, "key") and c.key == "_fts_text"]
+        assert isinstance(fts_conds[0].match, qmodels.MatchTextAny)
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_search_bm25_mode_applies_match_mode_filter(self, MockClient):
+        """bm25 mode also applies AND/OR match_mode filter on _fts_text."""
+        mock_client = MockClient.return_value
+        mock_results = MagicMock()
+        mock_results.points = []
+        mock_client.query_points.return_value = mock_results
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("bm25", match_mode="or", text_fields={"description": 1.0})
+
+        store.search("hello", None, cfg, limit=5, mode="bm25")
+
+        call_kwargs = mock_client.query_points.call_args[1]
+        qdrant_filter = call_kwargs.get("query_filter")
+        assert qdrant_filter is not None
+        must = qdrant_filter.must
+        fts_conds = [c for c in must if hasattr(c, "key") and c.key == "_fts_text"]
+        assert len(fts_conds) == 1
+        assert isinstance(fts_conds[0].match, qmodels.MatchTextAny)
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_search_hybrid_mode_does_not_apply_match_mode_filter(self, MockClient):
+        """hybrid mode → NO MatchText/MatchTextAny filter added to query_filter.must."""
+        mock_client = MockClient.return_value
+        mock_results = MagicMock()
+        mock_results.points = []
+        mock_client.query_points.return_value = mock_results
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("hybrid", match_mode="and")
+
+        store.search("hello world", [0.1, 0.2], cfg, limit=5, mode="hybrid")
+
+        call_kwargs = mock_client.query_points.call_args[1]
+        qdrant_filter = call_kwargs.get("query_filter")
+        # No filter should be set (or if set, should contain no MatchText/_fts_text cond)
+        if qdrant_filter is not None and qdrant_filter.must:
+            fts_conds = [
+                c for c in qdrant_filter.must
+                if hasattr(c, "key") and c.key == "_fts_text"
+            ]
+            assert len(fts_conds) == 0
+        # else: no filter at all is also correct
+
+    @patch("vector_stores.qdrant_store.QdrantClient")
+    def test_search_match_mode_filter_skipped_when_must_not_present(self, MockClient):
+        """must_not_text_terms path (scroll) must NOT add the match_text pre-filter."""
+        mock_client = MockClient.return_value
+        mock_scroll_points = [MagicMock()]
+        mock_scroll_points[0].payload = {"name": "Mario"}
+        mock_client.scroll.return_value = (mock_scroll_points, None)
+        store = _make_store()
+        store.open()
+        cfg = _make_cfg("fts", match_mode="and", text_fields={"name": 1.0})
+
+        store.search("hello", None, cfg, limit=5, mode="fts",
+                     must_not_text_terms=["foo"])
+
+        # scroll was used (not query_points)
+        assert mock_client.scroll.called
+        assert not mock_client.query_points.called
