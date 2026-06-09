@@ -27,6 +27,7 @@ Negation-aware search:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -299,9 +300,19 @@ async def search(
             )
 
     # --- Vector store search (engine-agnostic via BaseVectorStore.search()) ----
+    # Determine effective_mode first so embedding can be skipped for fts/bm25.
+    effective_mode = (
+        search_mode_override
+        if search_mode_override is not None
+        else getattr(cfg.vector_store, "search_mode", "hybrid")
+    )
     # Per-entity collections may use a different embedding model than the global config.
     # Build the adapter from the resolved cfg so query dims match the indexed vectors.
-    if collection is not None:
+    # Skip entirely for fts/bm25 modes — no dense vector needed (Ollama not required).
+    _needs_embedding = effective_mode in ("hybrid", "vector")
+    if not _needs_embedding:
+        embedding_adapter = None
+    elif collection is not None:
         embedding_adapter = build_embedding_adapter(cfg.embedding)
     else:
         embedding_adapter = getattr(request.app.state, "embedding_adapter", None)
@@ -330,12 +341,11 @@ async def search(
         else:
             query_vector = None
 
-        # Determine effective search mode: request override takes precedence over entity config.
-        effective_mode = (
-            search_mode_override
-            if search_mode_override is not None
-            else getattr(cfg.vector_store, "search_mode", "hybrid")
-        )
+        # For fts/bm25 + negation: pass neg_entities as must_not_text_terms so the vector
+        # store handles exclusion server-side via scroll+must_not (Qdrant). BM25 alone
+        # cannot surface records that don't contain the negated entity — they score 0.
+        _must_not = neg_entities if (effective_mode in ("fts", "bm25") and neg_entities) else None
+
         search_hits = vector_store.search(
             query=expand_q,
             query_vector=query_vector,
@@ -343,6 +353,7 @@ async def search(
             filters=parsed_filter_pairs if parsed_filter_pairs else None,
             limit=fetch_limit,
             mode=effective_mode,
+            must_not_text_terms=_must_not,
         )
     except HTTPException:
         raise
@@ -351,11 +362,14 @@ async def search(
         raise HTTPException(status_code=503, detail="Search backend unavailable")
 
     # --- Post-filter: apply negation exclusions and min_score -----------------
+    # For fts/bm25: Qdrant already excluded neg_entities server-side via must_not.
+    # For hybrid/vector: post-filter handles negation (no must_not passed to store).
+    _post_filter_entities = neg_entities if effective_mode not in ("fts", "bm25") else []
     hits = []
     for hit in search_hits:
         if min_score is not None and hit.score < min_score:
             continue
-        if neg_entities and _apply_negation_filter(hit.properties, neg_entities):
+        if _post_filter_entities and _apply_negation_filter(hit.properties, _post_filter_entities):
             continue
         # Apply field projection: only include return_props from the hit properties
         projected = {k: v for k, v in hit.properties.items() if k in return_props} if return_props else dict(hit.properties)

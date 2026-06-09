@@ -26,6 +26,7 @@ Use campo as-is from parsed_filter_pairs.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Callable
 
 from qdrant_client import QdrantClient
@@ -35,7 +36,8 @@ from vector_stores.base import BaseVectorStore, IndexResult, SearchHit, compute_
 
 logger = logging.getLogger(__name__)
 
-_EMBED_BATCH_SIZE = 1000  # mirrors weaviate_store/upsert.py constant
+_EMBED_BATCH_SIZE = 1000       # embedding modes: limited by Ollama throughput
+_FTS_UPSERT_BATCH_SIZE = 100  # fts/bm25: no embedding, larger batches = fewer round-trips
 
 # Maps ISO-639-1 lang codes to Qdrant SnowballLanguage enum attribute names
 _SNOWBALL_MAP: dict[str, str] = {
@@ -212,7 +214,7 @@ class QdrantVectorStore(BaseVectorStore):
     ) -> IndexResult:
         """Upsert records into Qdrant collection.
 
-        - fts mode: skips embedding entirely (D-08)
+        - fts/bm25 mode: skips embedding entirely (both use sparse BM25 server-side)
         - other modes: computes dense embeddings in batches with dedup (mirrors weaviate upsert.py)
         - Always stores _fts_text payload field (joined text_fields)
         - UUID deterministic: str(uuid5(NAMESPACE_DNS, source_type:record_id))
@@ -223,15 +225,66 @@ class QdrantVectorStore(BaseVectorStore):
         collection = cfg.vector_store.collection
         text_fields: list[str] = cfg.vector_store.text_fields or []
 
-        # --- Embedding (skip for fts mode, D-08) ---
-        if mode != "fts" and embedding_adapter is not None:
+        # ------------------------------------------------------------------ #
+        # FAST PATH — fts / bm25: no embedding, parallel upsert             #
+        # ------------------------------------------------------------------ #
+        if mode in ("fts", "bm25"):
+            # Build all PointStructs in a single Python pass (CPU only, no IO)
+            all_points: list = []
+            for record in records:
+                raw_id = record.get(id_field)
+                if raw_id is None or raw_id == "":
+                    continue
+                obj_uuid = str(compute_record_uuid(source_type, str(raw_id)))
+                payload = {k: v for k, v in record.items() if v is not None and v != ""}
+                fts_text = " ".join(
+                    str(record.get(f, "")) for f in text_fields if record.get(f)
+                )
+                payload["_fts_text"] = fts_text
+                all_points.append(
+                    qmodels.PointStruct(
+                        id=obj_uuid,
+                        payload=payload,
+                        vector={"sparse": qmodels.Document(text=fts_text, model="Qdrant/bm25")},
+                    )
+                )
+
+            total = len(all_points)
+            batches = [
+                all_points[i: i + _FTS_UPSERT_BATCH_SIZE]
+                for i in range(0, total, _FTS_UPSERT_BATCH_SIZE)
+            ]
+            logger.info(
+                "QdrantVectorStore FTS fast-path: %d points → %d batches × %d (sequential)",
+                total, len(batches), _FTS_UPSERT_BATCH_SIZE,
+            )
+
+            inserted_count = 0
+
+            for bi, batch in enumerate(batches):
+                if bi < start_from_batch:
+                    continue
+                self._client.upsert(collection_name=collection, points=batch, wait=True)
+                inserted_count += len(batch)
+                if on_batch_done:
+                    on_batch_done(bi, inserted_count, total)
+
+            logger.info(
+                "QdrantVectorStore.index_records: upserted %d points to %r (mode=%r)",
+                inserted_count, collection, mode,
+            )
+            return IndexResult(inserted=inserted_count, updated=0, skipped=0)
+
+        # ------------------------------------------------------------------ #
+        # SLOW PATH — hybrid / vector: sequential embedding batches          #
+        # ------------------------------------------------------------------ #
+        if embedding_adapter is not None:
             all_docs = [
                 " ".join(str(r.get(f, "")) for f in text_fields if r.get(f))
                 for r in records
             ]
             unique_docs = list(dict.fromkeys(all_docs))
             vec_map: dict[str, list[float]] = {}
-            num_batches = (len(unique_docs) + _EMBED_BATCH_SIZE - 1) // _EMBED_BATCH_SIZE
             if len(unique_docs) < len(all_docs):
                 logger.info(
                     "Embedding dedup: %d docs → %d unique", len(all_docs), len(unique_docs)
@@ -249,7 +302,6 @@ class QdrantVectorStore(BaseVectorStore):
         else:
             all_vecs = [None] * len(records)
 
-        # --- Build and upsert points ---
         inserted = 0
         points_batch: list = []
 
@@ -259,20 +311,16 @@ class QdrantVectorStore(BaseVectorStore):
                 continue
 
             obj_uuid = str(compute_record_uuid(source_type, str(raw_id)))
-
-            # Payload: all non-null/non-empty record fields + _fts_text
             payload = {k: v for k, v in record.items() if v is not None and v != ""}
             fts_text = " ".join(
                 str(record.get(f, "")) for f in text_fields if record.get(f)
             )
             payload["_fts_text"] = fts_text
 
-            # Vector dict per mode
             vector: dict = {}
             if mode in ("hybrid", "vector") and all_vecs[j] is not None:
                 vector["dense"] = all_vecs[j]
-            if mode in ("hybrid", "bm25", "fts"):
-                # Server-side BM25 inference via models.Document (no fastembed needed)
+            if mode == "hybrid":
                 vector["sparse"] = qmodels.Document(text=fts_text, model="Qdrant/bm25")
 
             points_batch.append(
@@ -280,12 +328,12 @@ class QdrantVectorStore(BaseVectorStore):
             )
 
             if len(points_batch) >= _EMBED_BATCH_SIZE:
-                self._client.upsert(collection_name=collection, points=points_batch)
+                self._client.upsert(collection_name=collection, points=points_batch, wait=True)
                 inserted += len(points_batch)
                 points_batch = []
 
         if points_batch:
-            self._client.upsert(collection_name=collection, points=points_batch)
+            self._client.upsert(collection_name=collection, points=points_batch, wait=True)
             inserted += len(points_batch)
 
         logger.info(
@@ -302,6 +350,7 @@ class QdrantVectorStore(BaseVectorStore):
         filters: list[tuple[str, str]] | None = None,
         limit: int = 10,
         mode: str = "hybrid",
+        must_not_text_terms: list[str] | None = None,
     ) -> list[SearchHit]:
         """Execute search using the appropriate Qdrant query API for search_mode.
 
@@ -312,18 +361,49 @@ class QdrantVectorStore(BaseVectorStore):
 
         Filters: FieldCondition with MatchValue. Qdrant does NOT lowercase field names
         (unlike Weaviate). Use campo as-is.
+
+        must_not_text_terms: when provided for fts/bm25 mode, uses scroll+must_not instead
+        of BM25 query. BM25 cannot return records that don't contain the query terms, so
+        negation queries like "chi NON lavora su X" would return empty results — scroll
+        fetches all records and excludes those matching the negated entity server-side.
         """
         collection = cfg.vector_store.collection
 
-        # Build filter
-        qdrant_filter = None
+        # Build must conditions from equality filters
+        must_conditions = []
         if filters:
-            conditions = [
+            must_conditions = [
                 qmodels.FieldCondition(key=campo, match=qmodels.MatchValue(value=valore))
                 for campo, valore in filters
             ]
-            # NOTE: Qdrant does NOT lowercase first char (unlike Weaviate) — campo used as-is
-            qdrant_filter = qmodels.Filter(must=conditions)
+
+        # Build must_not conditions from negated text terms
+        must_not_conditions = []
+        if must_not_text_terms:
+            must_not_conditions = [
+                qmodels.FieldCondition(key="_fts_text", match=qmodels.MatchText(text=term))
+                for term in must_not_text_terms
+            ]
+
+        # For fts/bm25 + negation: BM25 can't surface records that don't contain the
+        # negated entity (they score 0), so use scroll with must_not payload filter instead.
+        if mode in ("fts", "bm25") and must_not_conditions:
+            qdrant_filter = qmodels.Filter(
+                must=must_conditions or None,
+                must_not=must_not_conditions,
+            )
+            points, _ = self._client.scroll(
+                collection_name=collection,
+                scroll_filter=qdrant_filter,
+                limit=limit,
+                with_payload=True,
+            )
+            return [SearchHit(properties=p.payload or {}, score=1.0) for p in points]
+
+        # NOTE: Qdrant does NOT lowercase first char (unlike Weaviate) — campo used as-is
+        qdrant_filter = None
+        if must_conditions:
+            qdrant_filter = qmodels.Filter(must=must_conditions)
 
         if mode == "hybrid":
             results = self._client.query_points(

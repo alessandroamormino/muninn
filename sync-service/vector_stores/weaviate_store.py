@@ -116,6 +116,7 @@ class WeaviateVectorStore(BaseVectorStore):
         filters: list[tuple[str, str]] | None = None,
         limit: int = 10,
         mode: str = "hybrid",
+        must_not_text_terms: list[str] | None = None,
     ) -> list[SearchHit]:
         """Execute Weaviate hybrid/vector/bm25 query. Returns list[SearchHit].
 
@@ -127,6 +128,8 @@ class WeaviateVectorStore(BaseVectorStore):
           hybrid -> 0.5 (balanced BM25 + vector)
           vector -> 1.0 (vector only)
           bm25   -> 0.0 (BM25 only, uses existing hybrid(alpha=0.0) pattern)
+
+        must_not_text_terms: ignored for Weaviate — post-filter in search.py handles negation.
         """
         import weaviate.classes.query as _wvc_query
 

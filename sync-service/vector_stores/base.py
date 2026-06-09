@@ -182,6 +182,7 @@ class BaseVectorStore(ABC):
         filters: list[tuple[str, str]] | None = None,
         limit: int = 10,
         mode: str = "hybrid",
+        must_not_text_terms: list[str] | None = None,
     ) -> list[SearchHit]:
         """Run a search query. Returns ranked results.
 
@@ -192,6 +193,8 @@ class BaseVectorStore(ABC):
             filters: list of (campo, valore) pairs; engine applies AND logic
             limit: max results to return
             mode: "hybrid" | "vector" | "bm25" | "fts"
+            must_not_text_terms: terms that must NOT appear in _fts_text (server-side exclusion).
+                For fts/bm25 + negation: Qdrant uses scroll+must_not; Weaviate ignores (post-filter handles it).
         """
 
     @abstractmethod
