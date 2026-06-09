@@ -74,6 +74,8 @@ Returns JSON with `_score` (hybrid BM25 + semantic, higher = better) and `took_m
 
 ## Documentation
 
+- [User guide](docs/user-guide.md) — what it does, how to use the GUI, use cases
+- [Architecture](docs/architecture.md) — system layers, adapters, how to extend
 - [Configuration reference](docs/configuration.md)
 - [API reference](docs/api-reference.md)
 - [Deployment guide](docs/deployment.md)
