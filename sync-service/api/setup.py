@@ -114,11 +114,17 @@ INSTRUCTIONS:
 2. Choose ONE column as id_field (it can also appear in metadata_fields).
 3. output_fields should be a useful subset of text_fields union metadata_fields (5-8 fields).
 4. graph_filter_fields: choose 1-5 categorical metadata columns with low cardinality (enums, status, type, category) that would be useful as graph filters. Exclude IDs, emails, free-text, and high-cardinality fields.
-5. Return ONLY a JSON object with this exact schema - no prose, no explanation outside the JSON:
+5. field_weights: assign a weight 0.1-1.0 to each text_field.
+   The most semantically important field gets 1.0 (primary descriptor).
+   Secondary fields get 0.3-0.7 (titles, tags, short labels).
+   If only one text_field, weights = {{that_field: 1.0}}.
+   Keys MUST exactly match the strings used in text_fields.
+6. Return ONLY a JSON object with this exact schema - no prose, no explanation outside the JSON:
 
 {{
   "id_field": "<column_name>",
   "text_fields": ["<col>", ...],
+  "field_weights": {{"<text_col>": 1.0, "<text_col2>": 0.5}},
   "metadata_fields": ["<col>", ...],
   "output_fields": ["<col>", ...],
   "graph_filter_fields": ["<col>", ...],
@@ -145,6 +151,13 @@ def _validate_suggested_fields(suggested: dict, headers: list[str]) -> None:
         raise ValueError(
             f"Suggested id_field {id_field!r} does not exist in CSV headers: {sorted(header_set)}"
         )
+    # Phase 23: field_weights keys must exist in CSV headers (T-23-04-05)
+    # Empty/missing field_weights is acceptable (backward compat).
+    for field in suggested.get("field_weights", {}):
+        if field not in header_set:
+            raise ValueError(
+                f"Suggested field_weights key {field!r} does not exist in CSV headers: {sorted(header_set)}"
+            )
 
 
 @router.post("/setup/suggest-config")
@@ -212,6 +225,7 @@ def suggest_config(body: SuggestConfigRequest, _: UserRecord = Depends(require_a
         "id_field": llm_result.get("id_field", ""),
         "collection": collection,
         "text_fields": llm_result.get("text_fields", []),
+        "field_weights": llm_result.get("field_weights", {}),  # Phase 23
         "metadata_fields": llm_result.get("metadata_fields", []),
         "output_fields": llm_result.get("output_fields", []),
         "graph_filter_fields": llm_result.get("graph_filter_fields", []),
