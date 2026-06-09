@@ -34,8 +34,9 @@ def _make_config_yaml(tmp_path: Path, collection: str, text_fields: list[str] | 
     cfg = {
         "source": {"type": "csv", "file_path": "./data/test.csv", "id_field": "id", "delimiter": ","},
         "embedding": {"type": "ollama", "model": "qwen3-embedding:4b"},
-        "weaviate": {
+        "vector_store": {
             "collection": collection,
+            "search_mode": "fts",
             "text_fields": text_fields,
             "metadata_fields": [],
         },

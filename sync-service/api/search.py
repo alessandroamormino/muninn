@@ -31,7 +31,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -39,7 +39,14 @@ from auth.dependencies import get_current_user
 from auth.user_store import UserRecord
 from config.settings import _CONFIG_PATH, load_config, settings
 from embeddings import build_embedding_adapter
-from vector_stores.synonyms import _load_synonyms, _expand_query
+from vector_stores.synonyms import _load_synonyms, _expand_query, _get_omw_synonyms, _ensure_omw_downloaded
+from vector_stores.fuzzy import _apply_fuzzy_expansion
+# Phase 23: fuzzy vocab populated by Plan 03's QdrantVectorStore.index_records at full-sync time.
+# api/search.py reads the module-level dict via .get() at query time.
+from vector_stores import qdrant_store as _qdrant_store_mod
+# Phase 23: explicit per-route rate limiter (T-23-04-04).
+# Re-use the existing _limiter singleton from api.auth so that rate-limit state is shared.
+from api.auth import _limiter as limiter
 
 _CONFIG_ROOT = _CONFIG_PATH.parent  # configuration/ dir (container) or project_root/configuration/ (host)
 
@@ -179,6 +186,10 @@ async def search(
         default=None,
         description="Override search_mode for this request (e.g. 'fts', 'bm25', 'vector', 'hybrid'). If omitted uses entity config.",
     ),
+    match_mode_override: Annotated[Optional[Literal["and", "or"]], Query(
+        alias="match_mode",
+        description="Override AND/OR match mode for fts/bm25 modes. Values: 'and' | 'or'. Default uses entity fts.match_mode (default 'and').",
+    )] = None,
     _user: UserRecord = Depends(get_current_user),
 ) -> dict:
     """Ricerca ibrida (BM25 + semantica). Ritorna {query, results:[{...props, _score}, ...], cached}."""
@@ -333,6 +344,40 @@ async def search(
                         embed_q, expand_q, effective_collection,
                     )
 
+        # Phase 23: OMW synonym expansion (when fts.use_omw=true in entity config)
+        if engine == "qdrant" and getattr(getattr(cfg.vector_store, "fts", None), "use_omw", False):
+            lang = getattr(cfg.vector_store.fts, "language", "en")
+            try:
+                _ensure_omw_downloaded(lang)
+                omw_extras: list[str] = []
+                for token in embed_q.split():
+                    omw_extras.extend(_get_omw_synonyms(token, lang))
+                # Append OMW lemmas not already in the expanded query
+                existing_tokens = set(expand_q.lower().split())
+                omw_new = [w for w in omw_extras if w not in existing_tokens]
+                if omw_new:
+                    expand_q = expand_q + " " + " ".join(omw_new)
+                    logger.info("OMW expansion: added %d lemmas", len(omw_new))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("OMW expansion failed: %s", exc)
+
+        # Phase 23: fuzzy expansion (Qdrant only).
+        # Vocab is populated by Plan 03's QdrantVectorStore.index_records via _fts_text scroll
+        # at full-sync time. When a collection has not yet been synced, vocab is empty and
+        # _apply_fuzzy_expansion returns the input query unchanged (graceful no-op).
+        if engine == "qdrant":
+            fuzzy_vocab: frozenset[str] = _qdrant_store_mod._fuzzy_vocab.get(
+                effective_collection or "", frozenset()
+            )
+            lang_for_fuzzy = (
+                getattr(cfg.vector_store.fts, "language", "en")
+                if hasattr(cfg.vector_store, "fts") else "en"
+            )
+            expand_q_fuzzy = _apply_fuzzy_expansion(expand_q, fuzzy_vocab, lang=lang_for_fuzzy)
+            if expand_q_fuzzy != expand_q:
+                logger.info("Fuzzy expansion: %r → %r", expand_q, expand_q_fuzzy)
+                expand_q = expand_q_fuzzy
+
         if embedding_adapter is not None:
             # Client-side embedding: embed the clean query (negation stripped + synonyms expanded)
             # for a better semantic vector. The original q is still passed as BM25 text.
@@ -354,6 +399,7 @@ async def search(
             limit=fetch_limit,
             mode=effective_mode,
             must_not_text_terms=_must_not,
+            match_mode_override=match_mode_override,
         )
     except HTTPException:
         raise
@@ -427,4 +473,76 @@ async def search_suggestions(
         return history_store.get_suggestions(_user.username, q, limit=limit)
     except Exception as exc:  # noqa: BLE001
         logger.warning("suggestions error: %s", exc)
+        return []
+
+
+@router.get("/search/suggest")
+@limiter.limit("60/minute")
+async def search_suggest(
+    request: Request,
+    q: Annotated[str, Query(min_length=1, max_length=200)],
+    collection: Annotated[str, Query(...)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 5,
+    _user: UserRecord = Depends(get_current_user),
+) -> list[str]:
+    """Return autocomplete suggestions from Qdrant scroll on _fts_text (Qdrant-only).
+
+    Path-traversal guard: collection validated via _COLLECTION_RE (T-11-01, T-23-04-02).
+    Auth: JWT required (T-23-04-03).
+    Rate limit: explicit @limiter.limit("60/minute") (T-23-04-04, W2).
+    Weaviate path: returns [] gracefully (no 500).
+    Error path: Qdrant error returns [] gracefully (no 500).
+    """
+    # Path-traversal guard (T-11-01, T-23-04-02) — MUST be first, before engine check
+    if not _COLLECTION_RE.match(collection):
+        raise HTTPException(status_code=422, detail="Invalid collection name")
+
+    # Qdrant-only — Weaviate path returns empty list gracefully
+    if os.getenv("VECTOR_STORE_ENGINE", "weaviate") != "qdrant":
+        return []
+
+    config_path = _CONFIG_ROOT / collection / "config.yaml"
+    if not config_path.exists():
+        return []
+
+    try:
+        cfg = load_config(config_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("suggest config load failed for %r: %s", collection, exc)
+        return []
+
+    # First text_field used for suggestion values
+    # Pitfall 6: text_fields is dict[str, float] — use next(iter(...)) not [0]
+    text_fields = cfg.vector_store.text_fields
+    text_field = next(iter(text_fields), None) if text_fields else None
+    if not text_field:
+        return []
+
+    try:
+        from qdrant_client import models as qmodels
+        vector_store = request.app.state.vector_store
+        qdrant_filter = qmodels.Filter(
+            must=[qmodels.FieldCondition(
+                key="_fts_text",
+                match=qmodels.MatchText(text=q),
+            )]
+        )
+        points, _ = vector_store._client.scroll(
+            collection_name=cfg.vector_store.collection,
+            scroll_filter=qdrant_filter,
+            limit=50,
+            with_payload=[text_field],
+        )
+        seen: set[str] = set()
+        suggestions: list[str] = []
+        for p in points:
+            val = str((p.payload or {}).get(text_field, "")).strip()
+            if val and val not in seen:
+                seen.add(val)
+                suggestions.append(val)
+            if len(suggestions) >= limit:
+                break
+        return suggestions
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("suggest error: %s", exc)
         return []

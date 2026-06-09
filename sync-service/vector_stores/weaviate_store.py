@@ -117,8 +117,12 @@ class WeaviateVectorStore(BaseVectorStore):
         limit: int = 10,
         mode: str = "hybrid",
         must_not_text_terms: list[str] | None = None,
+        match_mode_override: str | None = None,
     ) -> list[SearchHit]:
         """Execute Weaviate hybrid/vector/bm25 query. Returns list[SearchHit].
+
+        Phase 23: match_mode_override accepted for API parity; Weaviate has no AND/OR
+        mode toggle — use Qdrant for that feature. Param is silently ignored here.
 
         Builds Weaviate-specific filter objects and runs the hybrid query.
         The Weaviate first-char lowercase transform for property names lives HERE
