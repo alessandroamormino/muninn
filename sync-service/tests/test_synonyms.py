@@ -147,3 +147,100 @@ class TestLoadSynonyms:
         (entity_dir / "synonyms.yaml").write_text("- [a, b]\n")
         result = _load_synonyms(tmp_path, "My-Entity_123")
         assert result == [["a", "b"]]
+
+
+# ---------------------------------------------------------------------------
+# TestOMW — Open Multilingual Wordnet helpers (Phase 23)
+# ---------------------------------------------------------------------------
+
+class TestOMW:
+    def _import_omw(self):
+        from vector_stores.synonyms import _ensure_omw_downloaded, _get_omw_synonyms
+        return _ensure_omw_downloaded, _get_omw_synonyms
+
+    def test_ensure_omw_unknown_lang_returns_false(self):
+        """Unsupported lang code → returns False without attempting download."""
+        _ensure, _ = self._import_omw()
+        # 'zz' not in _OMW_LANG_MAP → False without I/O
+        assert _ensure("zz") is False
+
+    def test_get_omw_synonyms_empty_when_wn_unavailable(self, monkeypatch):
+        """When wn is not installed, returns empty list gracefully."""
+        _, _get = self._import_omw()
+        monkeypatch.setattr("vector_stores.synonyms._WN_AVAILABLE", False)
+        result = _get("auto", "it")
+        assert result == []
+
+    def test_get_omw_synonyms_mocked(self, monkeypatch):
+        """When wn returns mock words/synsets, builds synonym list correctly."""
+        from types import SimpleNamespace
+        _, _get = self._import_omw()
+
+        # Build fake wn module with mock words → synsets → lemmas
+        fake_lemma1 = "automobile"
+        fake_lemma2 = "macchina"
+        fake_synset = SimpleNamespace(
+            lemmas=lambda lang: [fake_lemma1, fake_lemma2, "auto"]
+        )
+        fake_word = SimpleNamespace(synsets=lambda: [fake_synset])
+        fake_wn = SimpleNamespace(words=lambda token, lang: [fake_word])
+
+        monkeypatch.setattr("vector_stores.synonyms._wn", fake_wn)
+        monkeypatch.setattr("vector_stores.synonyms._WN_AVAILABLE", True)
+
+        result = _get("auto", "it")
+        # exact-match token "auto" should be excluded
+        assert "auto" not in result
+        # other lemmas should be present
+        assert "automobile" in result
+        assert "macchina" in result
+
+    def test_get_omw_synonyms_cap_at_10(self, monkeypatch):
+        """Result is capped at 10 synonyms."""
+        from types import SimpleNamespace
+        _, _get = self._import_omw()
+
+        # 15 distinct lemmas
+        lemmas = [f"word{i}" for i in range(15)]
+        fake_synset = SimpleNamespace(lemmas=lambda lang: lemmas)
+        fake_word = SimpleNamespace(synsets=lambda: [fake_synset])
+        fake_wn = SimpleNamespace(words=lambda token, lang: [fake_word])
+
+        monkeypatch.setattr("vector_stores.synonyms._wn", fake_wn)
+        monkeypatch.setattr("vector_stores.synonyms._WN_AVAILABLE", True)
+
+        result = _get("query", "it")
+        assert len(result) <= 10
+
+    def test_ensure_omw_downloaded_calls_wn_download(self, monkeypatch):
+        """_ensure_omw_downloaded calls wn.download with the whitelisted package id."""
+        from types import SimpleNamespace
+        _ensure, _ = self._import_omw()
+
+        download_calls = []
+
+        def fake_download(package, progress=True):
+            download_calls.append(package)
+
+        fake_wn = SimpleNamespace(download=fake_download)
+        monkeypatch.setattr("vector_stores.synonyms._wn", fake_wn)
+        monkeypatch.setattr("vector_stores.synonyms._WN_AVAILABLE", True)
+
+        result = _ensure("it")
+        assert result is True
+        assert download_calls == ["omw-iwn:1.4"]
+
+    def test_ensure_omw_returns_false_on_download_exception(self, monkeypatch):
+        """When wn.download raises, function returns False gracefully."""
+        from types import SimpleNamespace
+        _ensure, _ = self._import_omw()
+
+        def fake_download_raises(package, progress=True):
+            raise ConnectionError("network unavailable")
+
+        fake_wn = SimpleNamespace(download=fake_download_raises)
+        monkeypatch.setattr("vector_stores.synonyms._wn", fake_wn)
+        monkeypatch.setattr("vector_stores.synonyms._WN_AVAILABLE", True)
+
+        result = _ensure("it")
+        assert result is False
