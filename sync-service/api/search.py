@@ -536,6 +536,13 @@ async def search_suggest(
         logger.warning("suggest config load failed for %r: %s", collection, exc)
         return []
 
+    search_mode = getattr(cfg.vector_store, "search_mode", None)
+    if search_mode not in ("fts", "bm25"):
+        raise HTTPException(
+            status_code=422,
+            detail="suggest is only available for fts/bm25 collections",
+        )
+
     # First text_field used for suggestion values
     # Pitfall 6: text_fields is dict[str, float] — use next(iter(...)) not [0]
     text_fields = cfg.vector_store.text_fields
