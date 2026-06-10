@@ -365,6 +365,18 @@ async def search(
         # Vocab is populated by Plan 03's QdrantVectorStore.index_records via _fts_text scroll
         # at full-sync time. When a collection has not yet been synced, vocab is empty and
         # _apply_fuzzy_expansion returns the input query unchanged (graceful no-op).
+        #
+        # AND-mode guard: fuzzy variants are OR-semantic by nature (find this term OR a close
+        # variant). Passing "mimmuzzo mimmuzza" to MatchText(AND) would require BOTH tokens to
+        # be present in a document — the opposite of what fuzzy search intends.
+        # Safe cases:
+        #   • single-term queries: AND/OR distinction is moot for one token; expansion + OR
+        #     pre-filter is always correct.
+        #   • OR mode: flat union of original + variants is exactly the right semantics.
+        # Unsafe case:
+        #   • multi-term AND: "(A OR A') AND (B OR B')" cannot be expressed as a flat string
+        #     with MatchText/MatchTextAny — skip expansion, preserve the user's strict AND.
+        _fuzzy_expanded = False
         if engine == "qdrant":
             fuzzy_vocab: frozenset[str] = _qdrant_store_mod._fuzzy_vocab.get(
                 effective_collection or "", frozenset()
@@ -373,10 +385,20 @@ async def search(
                 getattr(cfg.vector_store.fts, "language", "en")
                 if hasattr(cfg.vector_store, "fts") else "en"
             )
-            expand_q_fuzzy = _apply_fuzzy_expansion(expand_q, fuzzy_vocab, lang=lang_for_fuzzy)
-            if expand_q_fuzzy != expand_q:
-                logger.info("Fuzzy expansion: %r → %r", expand_q, expand_q_fuzzy)
-                expand_q = expand_q_fuzzy
+            _resolved_match_mode = match_mode_override or getattr(
+                getattr(cfg.vector_store, "fts", None), "match_mode", "and"
+            )
+            _pre_expansion_term_count = len(expand_q.split())
+            # fts/bm25: Snowball payload index already handles morphological variants via
+            # stemming — fuzzy expansion on top produces mismatches (e.g. "mimmuzzo" →
+            # "mimmuzzo mimmuzzi" misses "mimmo" which Snowball maps to the same stem).
+            _fuzzy_eligible = effective_mode not in ("fts", "bm25")
+            if _fuzzy_eligible and (_pre_expansion_term_count == 1 or _resolved_match_mode == "or"):
+                expand_q_fuzzy = _apply_fuzzy_expansion(expand_q, fuzzy_vocab, lang=lang_for_fuzzy)
+                if expand_q_fuzzy != expand_q:
+                    logger.info("Fuzzy expansion: %r → %r", expand_q, expand_q_fuzzy)
+                    expand_q = expand_q_fuzzy
+                    _fuzzy_expanded = True
 
         if embedding_adapter is not None:
             # Client-side embedding: embed the clean query (negation stripped + synonyms expanded)
@@ -399,7 +421,10 @@ async def search(
             limit=fetch_limit,
             mode=effective_mode,
             must_not_text_terms=_must_not,
-            match_mode_override=match_mode_override,
+            # When fuzzy expansion added variants, force OR so the pre-filter admits any
+            # variant. Without this, MatchText(AND) would require ALL expanded tokens to
+            # coexist in a single document, defeating fuzzy recall entirely.
+            match_mode_override="or" if _fuzzy_expanded else match_mode_override,
         )
     except HTTPException:
         raise

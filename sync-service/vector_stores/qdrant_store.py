@@ -511,41 +511,20 @@ class QdrantVectorStore(BaseVectorStore):
                 query_filter=qdrant_filter,
             )
         elif mode in ("bm25", "fts"):
-            # CRITICAL: Use sparse BM25 query — NOT MatchText filter (PITFALL 1).
-            # MatchText as a query_filter does NOT produce relevance scores.
-            # BM25 sparse vector query via models.Document returns ranked results.
-            _tf_cfg: dict[str, float] = cfg.vector_store.text_fields or {}
-            _field_names = list(_tf_cfg.keys())
-            if len(_field_names) > 1:
-                # Multi-sparse: weighted RRF fusion across per-field sparse vectors.
-                # Use RrfQuery(rrf=Rrf(weights=[...])) — NOT FusionQuery (Pitfall 2).
-                # FusionQuery has no weights field; only RrfQuery supports per-prefetch weights.
-                _weights = [_tf_cfg[f] for f in _field_names]
-                results = self._client.query_points(
-                    collection_name=collection,
-                    prefetch=[
-                        qmodels.Prefetch(
-                            query=qmodels.Document(text=query, model="Qdrant/bm25"),
-                            using=f"sparse_{field}",
-                            limit=limit * 2,
-                        )
-                        for field in _field_names
-                    ],
-                    query=qmodels.RrfQuery(rrf=qmodels.Rrf(weights=_weights)),
-                    limit=limit,
-                    with_payload=True,
-                    query_filter=qdrant_filter,
-                )
-            else:
-                # Single-field (or empty): legacy single sparse vector path (backward compat)
-                results = self._client.query_points(
-                    collection_name=collection,
-                    query=qmodels.Document(text=query, model="Qdrant/bm25"),
-                    using="sparse",
-                    limit=limit,
-                    with_payload=True,
-                    query_filter=qdrant_filter,
-                )
+            # Use scroll with the MatchText/MatchTextAny payload-index filter.
+            # The _fts_text index uses Snowball stemming (same as autocomplete), so
+            # morphological variants (e.g. "mimma" ~ "mimmuzzo") are matched correctly.
+            # BM25 sparse vectors are token-level and miss Snowball-stemmed synonyms,
+            # causing autocomplete and search to disagree on which results qualify.
+            # Tradeoff: no BM25 relevance ranking (score=1.0 for all matches); ordering
+            # is Qdrant internal. For ranked FTS, switch to hybrid mode.
+            fts_points, _ = self._client.scroll(
+                collection_name=collection,
+                scroll_filter=qdrant_filter,
+                limit=limit,
+                with_payload=True,
+            )
+            return [SearchHit(properties=p.payload or {}, score=1.0) for p in fts_points]
         else:
             raise ValueError(f"Unknown search mode: {mode!r}. Supported: hybrid, vector, bm25, fts")
 
@@ -554,25 +533,33 @@ class QdrantVectorStore(BaseVectorStore):
     def _build_fuzzy_vocab(self, collection: str) -> None:
         """Build in-memory term vocabulary from _fts_text scroll for fuzzy expansion.
 
-        Capped at _FUZZY_VOCAB_CAP tokens. Stored in module-level _fuzzy_vocab dict.
+        Paginates through the entire collection (following next_page_offset) so every
+        record contributes to the vocab, regardless of collection size. Stops early when
+        _FUZZY_VOCAB_CAP unique tokens are collected. Stored in module-level _fuzzy_vocab.
         Called after index_records in fts/bm25 modes. Gracefully no-ops on any error.
         """
         try:
-            points, _ = self._client.scroll(
-                collection_name=collection,
-                scroll_filter=None,
-                limit=_FUZZY_VOCAB_SCROLL_LIMIT,
-                with_payload=["_fts_text"],
-            )
             tokens: set[str] = set()
-            for p in points:
-                text = (p.payload or {}).get("_fts_text", "")
-                for token in re.findall(r"[\w]+", text.lower()):
-                    tokens.add(token)
+            offset = None
+            while True:
+                points, next_offset = self._client.scroll(
+                    collection_name=collection,
+                    scroll_filter=None,
+                    limit=_FUZZY_VOCAB_SCROLL_LIMIT,
+                    offset=offset,
+                    with_payload=["_fts_text"],
+                )
+                for p in points:
+                    text = (p.payload or {}).get("_fts_text", "")
+                    for token in re.findall(r"[\w]+", text.lower()):
+                        tokens.add(token)
+                        if len(tokens) >= _FUZZY_VOCAB_CAP:
+                            break
                     if len(tokens) >= _FUZZY_VOCAB_CAP:
                         break
-                if len(tokens) >= _FUZZY_VOCAB_CAP:
+                if len(tokens) >= _FUZZY_VOCAB_CAP or next_offset is None or not points:
                     break
+                offset = next_offset
             _fuzzy_vocab[collection] = frozenset(tokens)
             logger.info(
                 "fuzzy vocab built: %d tokens for %r", len(_fuzzy_vocab[collection]), collection
