@@ -1,0 +1,30 @@
+# Dev/test artifacts — never included in the production image
+sync-service/tests/
+sync-service/conftest.py
+sync-service/pytest.ini
+sync-service/.pytest_cache/
+
+# Planning and docs
+.planning/
+CLAUDE.md
+.claude/
+
+# Secrets and local config
+.env
+configuration/
+
+# Frontend source (only dist/ is served via Nginx)
+frontend/src/
+frontend/node_modules/
+frontend/*.config.*
+frontend/tsconfig*.json
+frontend/package*.json
+frontend/index.html
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db

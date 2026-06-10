@@ -7,6 +7,11 @@ data/
 # Per-entity configuration (may contain DB credentials via ${VAR} references)
 configuration/
 
+# Test suite (dev-only, not committed)
+sync-service/tests/
+sync-service/conftest.py
+sync-service/pytest.ini
+
 # Python artifacts
 __pycache__/
 *.py[cod]
