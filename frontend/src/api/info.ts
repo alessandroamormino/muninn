@@ -12,6 +12,7 @@ export interface InfoResponse {
   total_objects: number | null
   vector_store_engine: string
   search_mode: string
+  max_limit: number | null
 }
 
 export function useInfo() {

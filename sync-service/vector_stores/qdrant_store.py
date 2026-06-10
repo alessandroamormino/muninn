@@ -6,9 +6,11 @@ URL format: http://localhost:6333
 Search modes supported (QDRANT_MODES = hybrid | vector | bm25 | fts):
   - hybrid: dense KNN + sparse BM25 via RRF fusion (Prefetch + FusionQuery)
   - vector: dense KNN only (Ollama embeddings required)
-  - bm25:   sparse BM25 only (Qdrant native server-side inference)
-  - fts:    same as bm25 for scoring; text payload index adds stemming quality
-             (PITFALL 1: MatchText filter does NOT produce ranked results — always use sparse BM25 query)
+  - bm25/fts: scroll with per-term MatchText filter (Snowball + Levenshtein fuzzy expansion).
+              Each query term + Levenshtein-1 vocab variants → separate MatchText conditions
+              in `should` (OR). Each MatchText applies Snowball independently — MatchTextAny
+              does NOT preserve per-variant Snowball stemming. Results scored by field priority
+              (text_fields config order): primary field match → higher score.
 
 Qdrant collection schema per search_mode:
   - hybrid/vector: vectors_config={"dense": VectorParams(size=dims, distance=COSINE)}
@@ -16,6 +18,7 @@ Qdrant collection schema per search_mode:
   - hybrid/bm25/fts: create_payload_index("_fts_text", TextIndexParams(stemmer=Snowball))
 
 _fts_text payload: always stored; contains joined text_fields values.
+_fts_{field} payload: stored per text_field; used for field-weighted scoring at search time.
 
 UUID format: str(uuid5(NAMESPACE_DNS, source_type + ":" + record_id))
 (Pitfall 5: Qdrant requires standard UUID string format for PointStruct.id)
@@ -35,6 +38,7 @@ from qdrant_client import models as qmodels
 
 from vector_stores.base import BaseVectorStore, IndexResult, SearchHit, compute_record_uuid
 from vector_stores.synonyms import _get_omw_synonyms
+from vector_stores.fuzzy import _apply_fuzzy_expansion
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +87,66 @@ def _snowball_language(lang: str) -> Any:
     """Map lang code to qdrant_client.models.SnowballLanguage enum value."""
     attr = _SNOWBALL_MAP.get(lang.lower(), "ENGLISH")
     return getattr(qmodels.SnowballLanguage, attr)
+
+
+def _build_fts_per_term_conditions(query: str, vocab: frozenset, lang: str) -> list:
+    """Per-term MatchText with fuzzy variants.
+
+    Each term + Levenshtein-1 vocab variants → should=[MatchText(v) for v in variants].
+    Each MatchText applies Snowball independently — MatchTextAny does NOT preserve
+    per-variant Snowball stemming, causing morphological matches to be missed.
+    When vocab is empty or python-Levenshtein absent: single MatchText per term (graceful).
+    """
+    terms = query.split() if query.strip() else []
+    conditions: list = []
+    for term in terms:
+        expanded = _apply_fuzzy_expansion(term, vocab, lang=lang)
+        variants = list(dict.fromkeys(expanded.split()))
+        if len(variants) == 1:
+            conditions.append(
+                qmodels.FieldCondition(key="_fts_text", match=qmodels.MatchText(text=term))
+            )
+        else:
+            conditions.append(qmodels.Filter(should=[
+                qmodels.FieldCondition(key="_fts_text", match=qmodels.MatchText(text=v))
+                for v in variants
+            ]))
+    return conditions
+
+
+def _score_by_field(
+    points: list,
+    text_fields: list[str],
+    query_variants: list[str],
+) -> list[SearchHit]:
+    """Score FTS/BM25 results by field priority (config order = weight order).
+
+    Score = sum(1.0/(1+i) for each field i whose _fts_{field} payload contains a query variant).
+    Falls back to score=1.0 when per-field payloads absent (old collections / Snowball-only match).
+    Results sorted highest score first.
+    """
+    if not text_fields or not query_variants:
+        return [SearchHit(properties=p.payload or {}, score=1.0) for p in points]
+
+    lower_variants = {v.lower() for v in query_variants}
+
+    def _field_score(payload: dict) -> float:
+        score = 0.0
+        for i, field in enumerate(text_fields):
+            field_text = str(payload.get(f"_fts_{field}", "") or payload.get(field, "") or "")
+            if not field_text:
+                continue
+            tokens = set(re.findall(r"[\w]+", field_text.lower()))
+            if lower_variants & tokens:
+                score += 1.0 / (1 + i)
+        return score if score > 0 else 1.0
+
+    hits = [
+        SearchHit(properties=p.payload or {}, score=_field_score(p.payload or {}))
+        for p in points
+    ]
+    hits.sort(key=lambda h: -h.score)
+    return hits
 
 
 class QdrantVectorStore(BaseVectorStore):
@@ -270,6 +334,8 @@ class QdrantVectorStore(BaseVectorStore):
                     str(record.get(f, "")) for f in text_fields if record.get(f)
                 )
                 payload["_fts_text"] = fts_text
+                for field in text_fields:
+                    payload[f"_fts_{field}"] = str(record.get(field, "") or "")
 
                 # _synonyms payload (fts/bm25 modes only; empty list when use_omw=False)
                 synonyms_list: list[str] = []
@@ -373,6 +439,8 @@ class QdrantVectorStore(BaseVectorStore):
                 str(record.get(f, "")) for f in text_fields if record.get(f)
             )
             payload["_fts_text"] = fts_text
+            for field in text_fields:
+                payload[f"_fts_{field}"] = str(record.get(field, "") or "")
 
             vector: dict = {}
             if mode in ("hybrid", "vector") and all_vecs[j] is not None:
@@ -444,37 +512,52 @@ class QdrantVectorStore(BaseVectorStore):
                 for term in must_not_text_terms
             ]
 
-        # For fts/bm25 + negation: BM25 can't surface records that don't contain the
-        # negated entity (they score 0), so use scroll with must_not payload filter instead.
-        # NOTE: must_not path skips the match_mode pre-filter (scroll handles filtering).
-        if mode in ("fts", "bm25") and must_not_conditions:
-            qdrant_filter = qmodels.Filter(
-                must=must_conditions or None,
-                must_not=must_not_conditions,
+        # --- fts/bm25: per-term MatchText filter + Snowball + fuzzy + field scoring ----
+        if mode in ("bm25", "fts"):
+            _resolved_match_mode = match_mode_override or getattr(
+                cfg.vector_store.fts, "match_mode", "and"
             )
-            points, _ = self._client.scroll(
+            lang = getattr(cfg.vector_store.fts, "language", "en")
+            vocab = _fuzzy_vocab.get(collection, frozenset())
+            text_fields_order = list((cfg.vector_store.text_fields or {}).keys())
+
+            per_term_conds = _build_fts_per_term_conditions(query, vocab, lang)
+
+            if _resolved_match_mode == "and":
+                all_must = (must_conditions or []) + per_term_conds
+                qdrant_filter = qmodels.Filter(must=all_must) if all_must else None
+            else:
+                if must_conditions and per_term_conds:
+                    qdrant_filter = qmodels.Filter(must=must_conditions, should=per_term_conds)
+                elif per_term_conds:
+                    qdrant_filter = qmodels.Filter(should=per_term_conds)
+                elif must_conditions:
+                    qdrant_filter = qmodels.Filter(must=must_conditions)
+                else:
+                    qdrant_filter = None
+
+            if must_not_conditions:
+                if qdrant_filter is not None:
+                    qdrant_filter = qmodels.Filter(
+                        must=list(qdrant_filter.must or []) or None,
+                        should=list(qdrant_filter.should or []) or None,
+                        must_not=must_not_conditions,
+                    )
+                else:
+                    qdrant_filter = qmodels.Filter(must_not=must_not_conditions)
+
+            fts_points, _ = self._client.scroll(
                 collection_name=collection,
                 scroll_filter=qdrant_filter,
                 limit=limit,
                 with_payload=True,
             )
-            return [SearchHit(properties=p.payload or {}, score=1.0) for p in points]
-
-        # Inject AND/OR match_mode pre-filter for fts/bm25 modes (not hybrid, not scroll path).
-        # Resolve: query override > cfg.fts.match_mode > "and"
-        if mode in ("fts", "bm25"):
-            _resolved_match_mode = match_mode_override or getattr(
-                cfg.vector_store.fts, "match_mode", "and"
-            )
-            text_condition = qmodels.FieldCondition(
-                key="_fts_text",
-                match=(
-                    qmodels.MatchText(text=query)
-                    if _resolved_match_mode == "and"
-                    else qmodels.MatchTextAny(text_any=query)
-                ),
-            )
-            must_conditions = [text_condition] + (must_conditions or [])
+            all_variants = list(dict.fromkeys(
+                v
+                for term in (query.split() if query.strip() else [])
+                for v in _apply_fuzzy_expansion(term, vocab, lang=lang).split()
+            ))
+            return _score_by_field(fts_points, text_fields_order, all_variants)
 
         # NOTE: Qdrant does NOT lowercase first char (unlike Weaviate) — campo used as-is
         qdrant_filter = None
@@ -510,21 +593,6 @@ class QdrantVectorStore(BaseVectorStore):
                 with_payload=True,
                 query_filter=qdrant_filter,
             )
-        elif mode in ("bm25", "fts"):
-            # Use scroll with the MatchText/MatchTextAny payload-index filter.
-            # The _fts_text index uses Snowball stemming (same as autocomplete), so
-            # morphological variants (e.g. "mimma" ~ "mimmuzzo") are matched correctly.
-            # BM25 sparse vectors are token-level and miss Snowball-stemmed synonyms,
-            # causing autocomplete and search to disagree on which results qualify.
-            # Tradeoff: no BM25 relevance ranking (score=1.0 for all matches); ordering
-            # is Qdrant internal. For ranked FTS, switch to hybrid mode.
-            fts_points, _ = self._client.scroll(
-                collection_name=collection,
-                scroll_filter=qdrant_filter,
-                limit=limit,
-                with_payload=True,
-            )
-            return [SearchHit(properties=p.payload or {}, score=1.0) for p in fts_points]
         else:
             raise ValueError(f"Unknown search mode: {mode!r}. Supported: hybrid, vector, bm25, fts")
 

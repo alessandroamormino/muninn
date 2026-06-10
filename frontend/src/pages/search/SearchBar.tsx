@@ -68,7 +68,11 @@ export default function SearchBar({ placeholder, onSubmit, disabled, collection 
   const handle = (e: FormEvent) => {
     e.preventDefault()
     const trimmed = draft.trim()
-    if (trimmed) onSubmit(trimmed)
+    if (trimmed) {
+      onSubmit(trimmed)
+      setOpen(false)
+      setSelectedIndex(-1)
+    }
   }
 
   return (

@@ -10,7 +10,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 
 const PAGE_SIZE = 10
-const FETCH_LIMIT = 100
 
 export default function SearchPage() {
   const [collection, setCollection] = useState<string | null>(null)
@@ -38,7 +37,7 @@ export default function SearchPage() {
     collection,
     filter: filter || null,
     min_score: minScore,
-    limit: FETCH_LIMIT,
+    limit: entityInfo?.max_limit ?? undefined,
     search_mode: entityInfo?.vector_store_engine === 'qdrant' ? searchMode : undefined,
   })
 

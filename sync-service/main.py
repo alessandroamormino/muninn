@@ -278,4 +278,5 @@ async def info(
         "sync_mode": cfg.sync.mode,
         "sync_schedule": cfg.sync.schedule,
         "total_objects": total_objects,
+        "max_limit": cfg.api.max_limit,
     }

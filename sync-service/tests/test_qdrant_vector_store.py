@@ -217,13 +217,13 @@ class TestSearch:
 
     @patch("vector_stores.qdrant_store.QdrantClient")
     def test_search_bm25(self, MockClient):
-        """bm25: scroll with MatchText payload-index filter (Snowball stemming)."""
+        """bm25: scroll with per-term MatchText conditions in must (AND mode default)."""
         mock_client = MockClient.return_value
         mock_client.scroll.return_value = ([], None)
         store = _make_store()
         store.open()
 
-        store.search("query text", None, _make_cfg("bm25", text_fields={"description": 1.0}), limit=5, mode="bm25")
+        store.search("query", None, _make_cfg("bm25", text_fields={"description": 1.0}), limit=5, mode="bm25")
 
         assert mock_client.scroll.called
         call_kwargs = mock_client.scroll.call_args[1]
@@ -232,17 +232,17 @@ class TestSearch:
         must = qdrant_filter.must
         fts_conds = [c for c in must if hasattr(c, "key") and c.key == "_fts_text"]
         assert len(fts_conds) == 1
-        assert isinstance(fts_conds[0].match, (qmodels.MatchText, qmodels.MatchTextAny))
+        assert isinstance(fts_conds[0].match, qmodels.MatchText)
 
     @patch("vector_stores.qdrant_store.QdrantClient")
     def test_search_fts(self, MockClient):
-        """fts mode: scroll with MatchText/MatchTextAny payload-index filter (Snowball stemming)."""
+        """fts mode: scroll with per-term MatchText conditions in must (AND mode default)."""
         mock_client = MockClient.return_value
         mock_client.scroll.return_value = ([], None)
         store = _make_store()
         store.open()
 
-        store.search("query text", None, _make_cfg("fts", text_fields={"description": 1.0}), limit=5, mode="fts")
+        store.search("query", None, _make_cfg("fts", text_fields={"description": 1.0}), limit=5, mode="fts")
 
         assert mock_client.scroll.called
         call_kwargs = mock_client.scroll.call_args[1]
@@ -251,7 +251,7 @@ class TestSearch:
         must = qdrant_filter.must
         fts_conds = [c for c in must if hasattr(c, "key") and c.key == "_fts_text"]
         assert len(fts_conds) == 1
-        assert isinstance(fts_conds[0].match, (qmodels.MatchText, qmodels.MatchTextAny))
+        assert isinstance(fts_conds[0].match, qmodels.MatchText)
 
     @patch("vector_stores.qdrant_store.QdrantClient")
     def test_search_returns_search_hits(self, MockClient):
@@ -638,14 +638,14 @@ class TestFieldWeights:
 
     @patch("vector_stores.qdrant_store.QdrantClient")
     def test_search_multi_field_uses_scroll_filter(self, MockClient):
-        """Multi-field BM25 search uses scroll with MatchText/MatchTextAny filter (Snowball stemming)."""
+        """Multi-field BM25 search uses scroll with per-term MatchText conditions in must."""
         mock_client = MockClient.return_value
         mock_client.scroll.return_value = ([], None)
         store = _make_store()
         store.open()
         cfg = _make_cfg("bm25", text_fields={"description": 1.0, "tags": 0.5})
 
-        store.search("query text", None, cfg, limit=5, mode="bm25")
+        store.search("query", None, cfg, limit=5, mode="bm25")
 
         assert mock_client.scroll.called
         call_kwargs = mock_client.scroll.call_args[1]
@@ -653,18 +653,18 @@ class TestFieldWeights:
         assert qdrant_filter is not None
         fts_conds = [c for c in qdrant_filter.must if hasattr(c, "key") and c.key == "_fts_text"]
         assert len(fts_conds) == 1
-        assert isinstance(fts_conds[0].match, (qmodels.MatchText, qmodels.MatchTextAny))
+        assert isinstance(fts_conds[0].match, qmodels.MatchText)
 
     @patch("vector_stores.qdrant_store.QdrantClient")
     def test_search_single_field_uses_scroll_filter(self, MockClient):
-        """Single-field BM25 search uses scroll with MatchText/MatchTextAny filter."""
+        """Single-field BM25 search uses scroll with per-term MatchText condition in must."""
         mock_client = MockClient.return_value
         mock_client.scroll.return_value = ([], None)
         store = _make_store()
         store.open()
         cfg = _make_cfg("bm25", text_fields={"description": 1.0})
 
-        store.search("query text", None, cfg, limit=5, mode="bm25")
+        store.search("query", None, cfg, limit=5, mode="bm25")
 
         assert mock_client.scroll.called
         call_kwargs = mock_client.scroll.call_args[1]
@@ -672,7 +672,7 @@ class TestFieldWeights:
         assert qdrant_filter is not None
         fts_conds = [c for c in qdrant_filter.must if hasattr(c, "key") and c.key == "_fts_text"]
         assert len(fts_conds) == 1
-        assert isinstance(fts_conds[0].match, (qmodels.MatchText, qmodels.MatchTextAny))
+        assert isinstance(fts_conds[0].match, qmodels.MatchText)
 
 
 # ---------------------------------------------------------------------------
@@ -682,14 +682,14 @@ class TestFieldWeights:
 class TestMatchMode:
     @patch("vector_stores.qdrant_store.QdrantClient")
     def test_search_fts_and_adds_match_text_filter(self, MockClient):
-        """fts mode + match_mode='and' → scroll called with MatchText in scroll_filter.must."""
+        """fts mode + match_mode='and' → per-term MatchText conditions in scroll_filter.must."""
         mock_client = MockClient.return_value
         mock_client.scroll.return_value = ([], None)
         store = _make_store()
         store.open()
         cfg = _make_cfg("fts", match_mode="and")
 
-        store.search("hello world", None, cfg, limit=5, mode="fts")
+        store.search("hello", None, cfg, limit=5, mode="fts")
 
         call_kwargs = mock_client.scroll.call_args[1]
         qdrant_filter = call_kwargs.get("scroll_filter")
@@ -701,7 +701,7 @@ class TestMatchMode:
 
     @patch("vector_stores.qdrant_store.QdrantClient")
     def test_search_fts_or_adds_match_text_any_filter(self, MockClient):
-        """fts mode + match_mode='or' → scroll called with MatchTextAny in scroll_filter.must."""
+        """fts mode + match_mode='or' → per-term MatchText conditions in scroll_filter.should."""
         mock_client = MockClient.return_value
         mock_client.scroll.return_value = ([], None)
         store = _make_store()
@@ -713,14 +713,15 @@ class TestMatchMode:
         call_kwargs = mock_client.scroll.call_args[1]
         qdrant_filter = call_kwargs.get("scroll_filter")
         assert qdrant_filter is not None
-        must = qdrant_filter.must
-        fts_conds = [c for c in must if hasattr(c, "key") and c.key == "_fts_text"]
-        assert len(fts_conds) == 1
-        assert isinstance(fts_conds[0].match, qmodels.MatchTextAny)
+        # OR mode: per-term conditions go to should (not must)
+        should = qdrant_filter.should or []
+        fts_conds = [c for c in should if hasattr(c, "key") and c.key == "_fts_text"]
+        assert len(fts_conds) >= 1
+        assert all(isinstance(c.match, qmodels.MatchText) for c in fts_conds)
 
     @patch("vector_stores.qdrant_store.QdrantClient")
     def test_search_match_mode_override_param_wins(self, MockClient):
-        """match_mode_override='or' wins over cfg match_mode='and'."""
+        """match_mode_override='or' wins over cfg match_mode='and' → conditions in should."""
         mock_client = MockClient.return_value
         mock_client.scroll.return_value = ([], None)
         store = _make_store()
@@ -731,13 +732,15 @@ class TestMatchMode:
 
         call_kwargs = mock_client.scroll.call_args[1]
         qdrant_filter = call_kwargs.get("scroll_filter")
-        must = qdrant_filter.must
-        fts_conds = [c for c in must if hasattr(c, "key") and c.key == "_fts_text"]
-        assert isinstance(fts_conds[0].match, qmodels.MatchTextAny)
+        # OR override → per-term MatchText conditions in should (not must)
+        should = qdrant_filter.should or []
+        fts_conds = [c for c in should if hasattr(c, "key") and c.key == "_fts_text"]
+        assert len(fts_conds) >= 1
+        assert all(isinstance(c.match, qmodels.MatchText) for c in fts_conds)
 
     @patch("vector_stores.qdrant_store.QdrantClient")
     def test_search_bm25_mode_applies_match_mode_filter(self, MockClient):
-        """bm25 mode also applies AND/OR match_mode filter on _fts_text via scroll."""
+        """bm25 mode + match_mode='or' → per-term MatchText conditions in should."""
         mock_client = MockClient.return_value
         mock_client.scroll.return_value = ([], None)
         store = _make_store()
@@ -749,10 +752,11 @@ class TestMatchMode:
         call_kwargs = mock_client.scroll.call_args[1]
         qdrant_filter = call_kwargs.get("scroll_filter")
         assert qdrant_filter is not None
-        must = qdrant_filter.must
-        fts_conds = [c for c in must if hasattr(c, "key") and c.key == "_fts_text"]
+        # OR mode: conditions go to should
+        should = qdrant_filter.should or []
+        fts_conds = [c for c in should if hasattr(c, "key") and c.key == "_fts_text"]
         assert len(fts_conds) == 1
-        assert isinstance(fts_conds[0].match, qmodels.MatchTextAny)
+        assert isinstance(fts_conds[0].match, qmodels.MatchText)
 
     @patch("vector_stores.qdrant_store.QdrantClient")
     def test_search_hybrid_mode_does_not_apply_match_mode_filter(self, MockClient):

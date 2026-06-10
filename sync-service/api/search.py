@@ -241,12 +241,17 @@ async def search(
             logger.warning("cache lookup error: %s", _cache_exc)
 
     # --- Limit validation --------------------------------------------------
-    effective_limit = limit if limit is not None else cfg.api.default_limit
-    if not (1 <= effective_limit <= cfg.api.max_limit):
+    # When max_limit is None (not set in config): no upper cap; default = 10_000 ("fetch all").
+    # When max_limit is set: bound limit to [1, max_limit]; default = default_limit.
+    _no_cap = cfg.api.max_limit is None
+    effective_limit = limit if limit is not None else (10_000 if _no_cap else cfg.api.default_limit)
+    if not _no_cap and not (1 <= effective_limit <= cfg.api.max_limit):
         raise HTTPException(
             status_code=422,
             detail=f"limit must be between 1 and {cfg.api.max_limit}",
         )
+    if effective_limit < 1:
+        raise HTTPException(status_code=422, detail="limit must be >= 1")
 
     # --- Field projection --------------------------------------------------
     allowed = set(cfg.vector_store.text_fields) | set(cfg.vector_store.metadata_fields)
@@ -304,7 +309,7 @@ async def search(
     if any(t.lower().rstrip("?!,.:;") in _NEGATION_TOKENS for t in q.split()):
         embed_q, neg_entities = _parse_negation(q)
         if neg_entities:
-            fetch_limit = min(effective_limit * 3, cfg.api.max_limit)
+            fetch_limit = effective_limit * 3 if cfg.api.max_limit is None else min(effective_limit * 3, cfg.api.max_limit)
             logger.info(
                 "Negation detected: embed_q=%r, entities=%r, fetch_limit=%d",
                 embed_q, neg_entities, fetch_limit,
