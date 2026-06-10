@@ -241,20 +241,26 @@ async def search(
             logger.warning("cache lookup error: %s", _cache_exc)
 
     # --- Limit validation --------------------------------------------------
-    # When max_limit is None (not set in config): no upper cap; default = 10_000 ("fetch all").
-    # When max_limit is set: bound limit to [1, max_limit]; default = default_limit.
+    # default_limit always applies when limit param is absent.
+    # max_limit=None means no upper cap (any explicit limit is accepted).
+    # max_limit=N means explicit limit is capped to [1, N].
     _no_cap = cfg.api.max_limit is None
-    effective_limit = limit if limit is not None else (10_000 if _no_cap else cfg.api.default_limit)
-    if not _no_cap and not (1 <= effective_limit <= cfg.api.max_limit):
+    effective_limit = limit if limit is not None else cfg.api.default_limit
+    if effective_limit < 1:
+        raise HTTPException(status_code=422, detail="limit must be >= 1")
+    if not _no_cap and effective_limit > cfg.api.max_limit:
         raise HTTPException(
             status_code=422,
             detail=f"limit must be between 1 and {cfg.api.max_limit}",
         )
-    if effective_limit < 1:
-        raise HTTPException(status_code=422, detail="limit must be >= 1")
 
     # --- Field projection --------------------------------------------------
+    # id_field is always stored in the payload (Qdrant stores all record fields).
+    # Include it in allowed so it can appear in output_fields or ?fields=.
+    id_field_name = cfg.source.id_field or ""
     allowed = set(cfg.vector_store.text_fields) | set(cfg.vector_store.metadata_fields)
+    if id_field_name:
+        allowed.add(id_field_name)
     if fields:
         requested = [f.strip() for f in fields.split(",") if f.strip()]
         invalid = [f for f in requested if f not in allowed]
@@ -265,8 +271,6 @@ async def search(
             )
         return_props = requested
     else:
-        # id_field is used for UUID generation only and is never stored as a Weaviate property,
-        # so filter output_fields to the intersection with text_fields ∪ metadata_fields.
         return_props = [f for f in cfg.api.output_fields if f in allowed] or list(allowed)
 
     # --- Filter parsing (D-01 through D-09) ------------------------------------

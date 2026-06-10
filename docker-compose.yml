@@ -88,18 +88,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  weaviate-ui:
-    image: naaive/weaviate-ui:latest
-    container_name: weaviate-ui
-    profiles: [weaviate]
-    ports:
-      - "7777:7777"
-    environment:
-      WEAVIATE_URL: "http://vector-db:8080"
-    depends_on:
-      - vector-db
-    restart: unless-stopped
-
 volumes:
   weaviate_data:
     driver: local
