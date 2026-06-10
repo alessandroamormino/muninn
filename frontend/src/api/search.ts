@@ -20,7 +20,6 @@ export interface SearchParams {
   min_score?: number | null
   limit?: number
   search_mode?: string
-  match_mode?: 'and' | 'or' | null
 }
 
 export function useSearch(params: SearchParams) {
@@ -36,9 +35,8 @@ export function useSearch(params: SearchParams) {
   if (params.min_score != null) qs.set('min_score', String(params.min_score))
   if (params.limit) qs.set('limit', String(params.limit))
   if (params.search_mode) qs.set('search_mode', params.search_mode)
-  if (params.match_mode != null) qs.set('match_mode', params.match_mode)
   return useQuery({
-    queryKey: ['search', params.q, params.collection, params.filter, params.min_score, params.limit, params.search_mode, params.match_mode],
+    queryKey: ['search', params.q, params.collection, params.filter, params.min_score, params.limit, params.search_mode],
     queryFn: () => fetchJson<SearchResponse>(`/api/search?${qs.toString()}`),
     enabled,
     staleTime: 10_000,
