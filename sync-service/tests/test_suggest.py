@@ -228,3 +228,63 @@ class TestSuggestEndpoint:
             "Expected @limiter.limit('60/minute') decorator on search_suggest. "
             "Got source:\n" + src[:500]
         )
+
+    def test_non_fts_search_mode_returns_422(self, tmp_path, monkeypatch):
+        """Engine=qdrant but search_mode=hybrid → 422 (not 200 [])."""
+        import api.search as search_mod
+        monkeypatch.setenv("VECTOR_STORE_ENGINE", "qdrant")
+        monkeypatch.setattr(search_mod, "_CONFIG_ROOT", tmp_path)
+
+        # Build a config.yaml with search_mode: hybrid (not fts/bm25)
+        coll_dir = tmp_path / "HybridColl"
+        coll_dir.mkdir(parents=True, exist_ok=True)
+        cfg = {
+            "source": {"type": "csv", "file_path": "./data/t.csv", "id_field": "id", "delimiter": ","},
+            "embedding": {"type": "ollama", "model": "qwen3-embedding:4b"},
+            "vector_store": {
+                "collection": "HybridColl",
+                "search_mode": "hybrid",
+                "text_fields": ["name"],
+                "metadata_fields": [],
+            },
+            "api": {"output_fields": ["name"], "default_limit": 10, "max_limit": 100},
+        }
+        (coll_dir / "config.yaml").write_text(yaml.dump(cfg))
+
+        app = _make_app()
+        with TestClient(app) as client:
+            resp = client.get(
+                "/search/suggest?q=test&collection=HybridColl",
+                headers={"Authorization": "Bearer fake"},
+            )
+        assert resp.status_code == 422
+        assert "fts" in resp.json()["detail"].lower() or "bm25" in resp.json()["detail"].lower()
+
+    def test_vector_search_mode_returns_422(self, tmp_path, monkeypatch):
+        """Engine=qdrant but search_mode=vector → 422."""
+        import api.search as search_mod
+        monkeypatch.setenv("VECTOR_STORE_ENGINE", "qdrant")
+        monkeypatch.setattr(search_mod, "_CONFIG_ROOT", tmp_path)
+
+        coll_dir = tmp_path / "VectorColl"
+        coll_dir.mkdir(parents=True, exist_ok=True)
+        cfg = {
+            "source": {"type": "csv", "file_path": "./data/t.csv", "id_field": "id", "delimiter": ","},
+            "embedding": {"type": "ollama", "model": "qwen3-embedding:4b"},
+            "vector_store": {
+                "collection": "VectorColl",
+                "search_mode": "vector",
+                "text_fields": ["name"],
+                "metadata_fields": [],
+            },
+            "api": {"output_fields": ["name"], "default_limit": 10, "max_limit": 100},
+        }
+        (coll_dir / "config.yaml").write_text(yaml.dump(cfg))
+
+        app = _make_app()
+        with TestClient(app) as client:
+            resp = client.get(
+                "/search/suggest?q=test&collection=VectorColl",
+                headers={"Authorization": "Bearer fake"},
+            )
+        assert resp.status_code == 422
