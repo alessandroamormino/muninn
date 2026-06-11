@@ -718,13 +718,14 @@ class QdrantVectorStore(BaseVectorStore):
                         query=query_vector,
                         using="dense",
                         limit=limit * 2,
+                        params=search_params,  # rescore must be on the leaf dense prefetch
                     ),
                 ],
                 query=qmodels.FusionQuery(fusion=qmodels.Fusion.RRF),
                 limit=limit,
                 with_payload=True,
                 query_filter=qdrant_filter,
-                search_params=search_params,
+                search_params=search_params,  # kept for API observability; Qdrant ignores at fusion level
             )
         elif mode == "vector":
             results = self._client.query_points(
