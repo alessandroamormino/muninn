@@ -236,6 +236,13 @@ class QdrantVectorStore(BaseVectorStore):
                         always_ram=_always_ram,
                     )
                 )
+            elif _quant_type == "bq":
+                _always_ram = getattr(_quant_cfg_obj, "always_ram", True)
+                _vp_kwargs["quantization_config"] = qmodels.BinaryQuantization(
+                    binary=qmodels.BinaryQuantizationConfig(
+                        always_ram=_always_ram,
+                    )
+                )
             vectors_cfg["dense"] = qmodels.VectorParams(**_vp_kwargs)
 
         # Build sparse_vectors_config (BM25 sparse, for hybrid/bm25/fts modes).
