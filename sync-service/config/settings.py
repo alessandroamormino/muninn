@@ -148,6 +148,45 @@ class FtsConfig(BaseModel):
     use_omw: bool = False  # Phase 23: download OMW at sync time
 
 
+class QdrantQuantizationConfig(BaseModel):
+    """Qdrant quantization settings (Phase 24). Distinct from VectorStoreConfig.quantization (Weaviate).
+
+    type:       "none" | "sq" | "bq"
+    quantile:   upper quantile for SQ calibration (default 0.99 — ignore top 1% outliers)
+    always_ram: keep quantized vectors in RAM even when on_disk=True (default True — recommended)
+    """
+    model_config = ConfigDict(extra="ignore")
+    type: Literal["none", "sq", "bq"] = "none"
+    quantile: float = 0.99
+    always_ram: bool = True
+
+
+class QdrantSearchConfig(BaseModel):
+    """Qdrant search-time quantization parameters (Phase 24).
+
+    rescore:      re-rank top candidates with full-precision vectors after ANN search
+    oversampling: oversample factor for rescoring (e.g. 2.0 = fetch 2x candidates before rescore)
+    """
+    model_config = ConfigDict(extra="ignore")
+    rescore: bool = False
+    oversampling: float = 2.0
+
+
+class QdrantOptimizationConfig(BaseModel):
+    """Qdrant large-scale RAM optimization config (Phase 24).
+
+    on_disk:      store raw vectors on disk via memmap (reduces RAM; HDD slower than RAM)
+    quantization: SQ/BQ quantization settings (see QdrantQuantizationConfig)
+    search:       search-time rescoring parameters (see QdrantSearchConfig)
+
+    All fields default to safe no-op values — existing configs without qdrant_opts are unaffected.
+    """
+    model_config = ConfigDict(extra="ignore")
+    on_disk: bool = False
+    quantization: QdrantQuantizationConfig = Field(default_factory=QdrantQuantizationConfig)
+    search: QdrantSearchConfig = Field(default_factory=QdrantSearchConfig)
+
+
 class VectorStoreConfig(BaseModel):
     collection: str = "Products"
     # Phase 23: text_fields accepts list[str] OR dict[str, float].
@@ -183,6 +222,9 @@ class VectorStoreConfig(BaseModel):
     search_mode: Literal["hybrid", "vector", "bm25", "fts"] = "hybrid"
     # FTS language config (Phase 15 — Qdrant fts mode only; ignored for Weaviate).
     fts: FtsConfig = Field(default_factory=FtsConfig)
+    # Qdrant large-scale RAM optimization (Phase 24 — Qdrant engine only; ignored for Weaviate).
+    # Do NOT confuse with VectorStoreConfig.quantization (Weaviate SQ/PQ/BQ — separate field).
+    qdrant_opts: QdrantOptimizationConfig = Field(default_factory=QdrantOptimizationConfig)
 
 
 class SyncConfig(BaseModel):
