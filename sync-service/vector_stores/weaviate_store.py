@@ -65,7 +65,7 @@ class WeaviateVectorStore(BaseVectorStore):
                 pass
         return create_collection_if_missing(
             client,
-            cfg.weaviate,
+            cfg.vector_store,
             embedding_type=cfg.embedding.type,
             embedding_dims=dims,
         )
@@ -104,7 +104,7 @@ class WeaviateVectorStore(BaseVectorStore):
         r = upsert_records(
             client,
             records,
-            cfg.weaviate,
+            cfg.vector_store,
             source_type,
             embedding_adapter,
             id_field=id_field,
