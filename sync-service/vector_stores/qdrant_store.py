@@ -326,6 +326,7 @@ class QdrantVectorStore(BaseVectorStore):
         id_field: str | None = None,
         start_from_batch: int = 0,
         on_batch_done: Callable[[int, int, int], None] | None = None,
+        is_full_index: bool = False,
     ) -> IndexResult:
         """Upsert records into Qdrant collection.
 
@@ -452,6 +453,38 @@ class QdrantVectorStore(BaseVectorStore):
         else:
             all_vecs = [None] * len(records)
 
+        # Phase 24-02: HNSW staging bulk-load pattern.
+        # Temporarily disable HNSW index building (m=0) before a full-index bulk upsert,
+        # then rebuild with production settings (m=16, ef_construct=200) after all batches
+        # complete. This prevents Qdrant optimizer thrashing during initial 1M+ record ingestion
+        # and provides 5-10x faster ingest for large datasets.
+        # Gate: only for full re-index (is_full_index=True), hybrid/vector modes (have dense
+        # HNSW), and non-empty record sets (nothing to upsert = no staging needed).
+        _staging = (
+            is_full_index
+            and mode in ("hybrid", "vector")
+            and len(records) > 0
+        )
+        if _staging:
+            try:
+                self._client.update_collection(
+                    collection_name=collection,
+                    vectors_config={
+                        "dense": qmodels.VectorParamsDiff(
+                            hnsw_config=qmodels.HnswConfigDiff(m=0)
+                        )
+                    },
+                )
+                logger.info(
+                    "QdrantVectorStore staging: HNSW disabled (m=0) for bulk upsert on %r",
+                    collection,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Staging m=0 failed for %r (non-fatal): %s", collection, exc
+                )
+                _staging = False  # fall back: skip the restore call too
+
         inserted = 0
         points_batch: list = []
 
@@ -487,6 +520,26 @@ class QdrantVectorStore(BaseVectorStore):
         if points_batch:
             self._client.upsert(collection_name=collection, points=points_batch, wait=True)
             inserted += len(points_batch)
+
+        # Phase 24-02: restore HNSW index (m=16, ef_construct=200) after all upserts complete
+        if _staging:
+            try:
+                self._client.update_collection(
+                    collection_name=collection,
+                    vectors_config={
+                        "dense": qmodels.VectorParamsDiff(
+                            hnsw_config=qmodels.HnswConfigDiff(m=16, ef_construct=200)
+                        )
+                    },
+                )
+                logger.info(
+                    "QdrantVectorStore staging: HNSW rebuilt (m=16, ef_construct=200) for %r",
+                    collection,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Staging m=16 restore failed for %r: %s", collection, exc
+                )
 
         logger.info(
             "QdrantVectorStore.index_records: upserted %d points to %r (mode=%r)",
