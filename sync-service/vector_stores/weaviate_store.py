@@ -93,8 +93,13 @@ class WeaviateVectorStore(BaseVectorStore):
         id_field: str | None = None,
         start_from_batch: int = 0,
         on_batch_done: Callable[[int, int, int], None] | None = None,
+        is_full_index: bool = False,
     ) -> IndexResult:
-        """Upsert records via weaviate_store.upsert.upsert_records(). Returns IndexResult."""
+        """Upsert records via weaviate_store.upsert.upsert_records(). Returns IndexResult.
+
+        is_full_index: accepted for API parity with BaseVectorStore; Weaviate does not need
+        HNSW staging so this parameter is intentionally not used here.
+        """
         client = get_client()
         r = upsert_records(
             client,

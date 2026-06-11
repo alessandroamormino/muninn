@@ -160,6 +160,7 @@ class SyncEngine:
             id_field=self._id_field,
             start_from_batch=start_from_batch,
             on_batch_done=_on_batch_done,
+            is_full_index=True,
         )
 
         # Persist state for all records (both resumed and new batches)

@@ -160,6 +160,7 @@ class BaseVectorStore(ABC):
         id_field: str | None = None,
         start_from_batch: int = 0,
         on_batch_done: Callable[[int, int, int], None] | None = None,
+        is_full_index: bool = False,
     ) -> IndexResult:
         """Upsert records into the index. Handles embedding internally.
 
@@ -171,6 +172,8 @@ class BaseVectorStore(ABC):
             id_field: field name to use as record ID (overrides cfg default if provided)
             start_from_batch: skip already-processed batches (resumable full re-index)
             on_batch_done: callback(batch_num, done_records, total_records) for progress
+            is_full_index: when True, implementations may apply bulk-load optimizations
+                (e.g. Qdrant HNSW staging: disables index building during upsert, rebuilds after)
         """
 
     @abstractmethod
