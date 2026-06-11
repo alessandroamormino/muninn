@@ -208,15 +208,35 @@ class QdrantVectorStore(BaseVectorStore):
         if self._client.collection_exists(collection):
             return False
 
+        # Phase 24: read qdrant_opts for on_disk + SQ quantization config
+        qdrant_opts = getattr(cfg.vector_store, "qdrant_opts", None)
+        _on_disk = bool(getattr(qdrant_opts, "on_disk", False)) if qdrant_opts else False
+        _quant_cfg_obj = getattr(qdrant_opts, "quantization", None) if qdrant_opts else None
+        _quant_type = getattr(_quant_cfg_obj, "type", "none") if _quant_cfg_obj else "none"
+
         # Build vectors_config (dense, for hybrid/vector modes)
         vectors_cfg: dict = {}
         if mode in ("hybrid", "vector"):
             # dims from config _embedding_dims if available, else default to 2560 (qwen3-embedding:4b)
             dims = getattr(cfg.vector_store, "_embedding_dims", None) or 2560
-            vectors_cfg["dense"] = qmodels.VectorParams(
-                size=dims,
-                distance=qmodels.Distance.COSINE,
-            )
+            # Build VectorParams kwargs — on_disk and SQ are conditional (Phase 24)
+            _vp_kwargs: dict = {"size": dims, "distance": qmodels.Distance.COSINE}
+            if _on_disk:
+                _vp_kwargs["on_disk"] = True
+                # Keep HNSW graph index in RAM even when raw vectors are on disk
+                # (HnswConfigDiff(on_disk=False) is the default but must be explicit here)
+                _vp_kwargs["hnsw_config"] = qmodels.HnswConfigDiff(on_disk=False)
+            if _quant_type == "sq":
+                _quantile = getattr(_quant_cfg_obj, "quantile", 0.99)
+                _always_ram = getattr(_quant_cfg_obj, "always_ram", True)
+                _vp_kwargs["quantization_config"] = qmodels.ScalarQuantization(
+                    scalar=qmodels.ScalarQuantizationConfig(
+                        type=qmodels.ScalarType.INT8,
+                        quantile=_quantile,
+                        always_ram=_always_ram,
+                    )
+                )
+            vectors_cfg["dense"] = qmodels.VectorParams(**_vp_kwargs)
 
         # Build sparse_vectors_config (BM25 sparse, for hybrid/bm25/fts modes).
         # Multi-sparse: >1 text_field → named sparse vectors per field (sparse_{field}).
@@ -275,6 +295,13 @@ class QdrantVectorStore(BaseVectorStore):
             write_stored_search_mode(collection, mode)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not write search_mode_state for %r: %s", collection, exc)
+
+        # Persist current quantization key for Phase 24 change detection on next startup
+        try:
+            from vector_stores.quantization_state import write_stored_quantization_key, _quant_key
+            write_stored_quantization_key(collection, _quant_key(cfg))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not write quantization_state for %r: %s", collection, exc)
 
         return True
 
@@ -564,6 +591,30 @@ class QdrantVectorStore(BaseVectorStore):
         if must_conditions:
             qdrant_filter = qmodels.Filter(must=must_conditions)
 
+        # Phase 24: build rescoring SearchParams when SQ/BQ quantization is active + rescore=True
+        _qdrant_opts = getattr(cfg.vector_store, "qdrant_opts", None)
+        _quant_type_s = (
+            getattr(getattr(_qdrant_opts, "quantization", None), "type", "none")
+            if _qdrant_opts else "none"
+        )
+        _rescore = (
+            bool(getattr(getattr(_qdrant_opts, "search", None), "rescore", False))
+            if _qdrant_opts else False
+        )
+        _oversampling = (
+            float(getattr(getattr(_qdrant_opts, "search", None), "oversampling", 2.0))
+            if _qdrant_opts else 2.0
+        )
+        search_params = None
+        if _quant_type_s != "none" and _rescore:
+            search_params = qmodels.SearchParams(
+                quantization=qmodels.QuantizationSearchParams(
+                    ignore=False,
+                    rescore=True,
+                    oversampling=_oversampling,
+                )
+            )
+
         if mode == "hybrid":
             results = self._client.query_points(
                 collection_name=collection,
@@ -583,6 +634,7 @@ class QdrantVectorStore(BaseVectorStore):
                 limit=limit,
                 with_payload=True,
                 query_filter=qdrant_filter,
+                search_params=search_params,
             )
         elif mode == "vector":
             results = self._client.query_points(
@@ -592,6 +644,7 @@ class QdrantVectorStore(BaseVectorStore):
                 limit=limit,
                 with_payload=True,
                 query_filter=qdrant_filter,
+                search_params=search_params,
             )
         else:
             raise ValueError(f"Unknown search mode: {mode!r}. Supported: hybrid, vector, bm25, fts")

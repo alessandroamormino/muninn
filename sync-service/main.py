@@ -91,6 +91,17 @@ async def lifespan(app: FastAPI):
             _collection_name,
         )
         vector_store.drop_index(_collection_name)
+    # Phase 24: detect quantization/on_disk config change (Qdrant engine only).
+    # Lazy import avoids ImportError when qdrant-client is not installed (Weaviate deployments).
+    if engine == "qdrant":
+        from vector_stores.quantization_state import detect_quantization_change
+        if detect_quantization_change(_collection_name, settings):
+            logger.warning(
+                "quantization or on_disk config changed for %r — dropping existing index "
+                "for full re-index (Phase 24).",
+                _collection_name,
+            )
+            vector_store.drop_index(_collection_name)
     created = vector_store.create_index(settings)
     if created:
         logger.info("Collection %r created.", settings.vector_store.collection)
