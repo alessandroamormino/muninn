@@ -159,6 +159,8 @@ class QdrantVectorStore(BaseVectorStore):
     def __init__(self, url: str) -> None:
         self._url = url
         self._client: Any = None  # QdrantClient | None
+        # Tracks active HNSW staging per collection (begin_bulk_load / end_bulk_load).
+        self._staging_active: dict[str, bool] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -324,6 +326,65 @@ class QdrantVectorStore(BaseVectorStore):
     # Data operations
     # ------------------------------------------------------------------
 
+    def begin_bulk_load(self, collection_name: str, mode: str) -> None:
+        """Disable HNSW index building before streaming bulk upsert (m=0 staging).
+
+        Called by SyncEngine.run_full() before the streaming loop. Works together
+        with end_bulk_load() to bracket the entire multi-chunk ingestion so the
+        HNSW graph is built once at the end rather than incrementally per-chunk.
+        Only applies to hybrid/vector modes that have a dense HNSW index.
+        """
+        if mode not in ("hybrid", "vector"):
+            return
+        try:
+            self._client.update_collection(
+                collection_name=collection_name,
+                vectors_config={
+                    "dense": qmodels.VectorParamsDiff(
+                        hnsw_config=qmodels.HnswConfigDiff(m=0)
+                    )
+                },
+            )
+            self._staging_active[collection_name] = True
+            logger.info(
+                "QdrantVectorStore begin_bulk_load: HNSW disabled (m=0) for %r",
+                collection_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "begin_bulk_load: m=0 failed for %r (non-fatal): %s", collection_name, exc
+            )
+            self._staging_active[collection_name] = False
+
+    def end_bulk_load(self, collection_name: str) -> None:
+        """Restore HNSW production settings after streaming bulk upsert.
+
+        Called by SyncEngine.run_full() in a finally block so restore runs even
+        if the streaming loop raises (prevents collection stuck at m=0 permanently).
+        """
+        if not self._staging_active.get(collection_name):
+            self._staging_active.pop(collection_name, None)
+            return
+        try:
+            self._client.update_collection(
+                collection_name=collection_name,
+                vectors_config={
+                    "dense": qmodels.VectorParamsDiff(
+                        hnsw_config=qmodels.HnswConfigDiff(m=16, ef_construct=200)
+                    )
+                },
+            )
+            logger.info(
+                "QdrantVectorStore end_bulk_load: HNSW rebuilt (m=16, ef_construct=200) for %r",
+                collection_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "end_bulk_load: m=16 restore failed for %r: %s", collection_name, exc
+            )
+        finally:
+            self._staging_active.pop(collection_name, None)
+
     def index_records(
         self,
         records: list[dict[str, Any]],
@@ -332,6 +393,7 @@ class QdrantVectorStore(BaseVectorStore):
         embedding_adapter: Any = None,
         id_field: str | None = None,
         start_from_batch: int = 0,
+        batch_num_offset: int = 0,
         on_batch_done: Callable[[int, int, int], None] | None = None,
         is_full_index: bool = False,
     ) -> IndexResult:
@@ -434,34 +496,18 @@ class QdrantVectorStore(BaseVectorStore):
             return IndexResult(inserted=inserted_count, updated=0, skipped=0)
 
         # ------------------------------------------------------------------ #
-        # SLOW PATH — hybrid / vector: sequential embedding batches          #
+        # SLOW PATH — hybrid / vector: interleaved embed + upsert per batch  #
         # ------------------------------------------------------------------ #
-        # Phase 1: compute ALL embeddings first (no checkpointing).
-        # Checkpointing is tied to upsert batches in Phase 2 so that a resume
-        # via start_from_batch > 0 never produces vector-less (payload-only) points.
-        # The old code gated embedding batches on start_from_batch, leaving
-        # vec_map empty for skipped batches and causing all_vecs[j] = None
-        # for every record in those batches — they were then upserted without
-        # a "dense" key, making them invisible to vector/hybrid search.
-        if embedding_adapter is not None:
-            all_docs = [
-                " ".join(str(r.get(f, "")) for f in text_fields if r.get(f))
-                for r in records
-            ]
-            unique_docs = list(dict.fromkeys(all_docs))
-            vec_map: dict[str, list[float]] = {}
-            if len(unique_docs) < len(all_docs):
-                logger.info(
-                    "Embedding dedup: %d docs → %d unique", len(all_docs), len(unique_docs)
-                )
-            for i in range(0, len(unique_docs), _EMBED_BATCH_SIZE):
-                batch_texts = unique_docs[i: i + _EMBED_BATCH_SIZE]
-                batch_vecs = embedding_adapter.embed(batch_texts)
-                for txt, vec in zip(batch_texts, batch_vecs):
-                    vec_map[txt] = vec
-            all_vecs: list[list[float] | None] = [vec_map.get(d) for d in all_docs]
-        else:
-            all_vecs = [None] * len(records)
+        # Each batch: embed → build points → upsert → checkpoint.
+        # Keeps only _EMBED_BATCH_SIZE vectors in memory at any time (no
+        # all_vecs accumulation). batch_num gates both embedding and upsert:
+        # batches < start_from_batch are skipped entirely so vector-less
+        # points are never produced on resume (replaces CR-01 two-phase approach).
+        total_records = len(records)
+        inserted = 0
+        # batch_num_offset shifts the counter so on_batch_done reports global
+        # batch numbers when index_records() is called per-chunk from run_full().
+        batch_num = batch_num_offset - 1
 
         # Phase 24-02: HNSW staging bulk-load pattern.
         # Temporarily disable HNSW index building (m=0) before a full-index bulk upsert,
@@ -473,7 +519,7 @@ class QdrantVectorStore(BaseVectorStore):
         _staging = (
             is_full_index
             and mode in ("hybrid", "vector")
-            and len(records) > 0
+            and total_records > 0
         )
         if _staging:
             try:
@@ -493,65 +539,67 @@ class QdrantVectorStore(BaseVectorStore):
                 logger.warning(
                     "Staging m=0 failed for %r (non-fatal): %s", collection, exc
                 )
-                _staging = False  # fall back: skip the restore call too
+                _staging = False
 
-        # Phase 2: build upsert batches and apply start_from_batch gate.
-        # batch_num tracks completed upsert batches (not embedding batches).
-        # on_batch_done is called after each successful client.upsert(), so
-        # the checkpoint reflects actual durable upserts, not just embedding progress.
-        inserted = 0
-        points_batch: list = []
-        batch_num = -1
-        total_records = len(records)
-
-        def _do_upsert_batch(batch: list, bn: int) -> None:
-            nonlocal inserted
-            self._client.upsert(collection_name=collection, points=batch, wait=True)
-            inserted += len(batch)
-            if on_batch_done:
-                on_batch_done(bn, inserted, total_records)
-
-        upsert_body_done = False
         try:
-            for j, record in enumerate(records):
-                raw_id = record.get(id_field)
-                if raw_id is None or raw_id == "":
+            for batch_start in range(0, total_records, _EMBED_BATCH_SIZE):
+                batch_records = records[batch_start: batch_start + _EMBED_BATCH_SIZE]
+                batch_num += 1
+
+                if batch_num < start_from_batch:
                     continue
 
-                obj_uuid = str(compute_record_uuid(source_type, str(raw_id)))
-                payload = {k: v for k, v in record.items() if v is not None and v != ""}
-                fts_text = " ".join(
-                    str(record.get(f, "")) for f in text_fields if record.get(f)
-                )
-                payload["_fts_text"] = fts_text
-                for field in text_fields:
-                    payload[f"_fts_{field}"] = str(record.get(field, "") or "")
+                # Embed this batch (with within-batch dedup)
+                if embedding_adapter is not None:
+                    batch_docs = [
+                        " ".join(str(r.get(f, "")) for f in text_fields if r.get(f))
+                        for r in batch_records
+                    ]
+                    unique_docs = list(dict.fromkeys(batch_docs))
+                    if len(unique_docs) < len(batch_docs):
+                        logger.debug(
+                            "Embedding dedup batch %d: %d → %d unique",
+                            batch_num, len(batch_docs), len(unique_docs),
+                        )
+                    batch_vecs_list = embedding_adapter.embed(unique_docs)
+                    vec_map: dict[str, list[float]] = dict(zip(unique_docs, batch_vecs_list))
+                    batch_vecs: list[list[float] | None] = [vec_map.get(d) for d in batch_docs]
+                else:
+                    batch_vecs = [None] * len(batch_records)
 
-                vector: dict = {}
-                if mode in ("hybrid", "vector") and all_vecs[j] is not None:
-                    vector["dense"] = all_vecs[j]
-                if mode == "hybrid":
-                    vector["sparse"] = qmodels.Document(text=fts_text, model="Qdrant/bm25")
-
-                points_batch.append(
-                    qmodels.PointStruct(id=obj_uuid, payload=payload, vector=vector)
-                )
-
-                if len(points_batch) >= _EMBED_BATCH_SIZE:
-                    batch_num += 1
-                    if batch_num < start_from_batch:
-                        points_batch = []
+                # Build PointStructs for this batch
+                points_batch: list = []
+                for record, vec in zip(batch_records, batch_vecs):
+                    raw_id = record.get(id_field)
+                    if raw_id is None or raw_id == "":
                         continue
-                    _do_upsert_batch(points_batch, batch_num)
-                    points_batch = []
+                    obj_uuid = str(compute_record_uuid(source_type, str(raw_id)))
+                    payload = {k: v for k, v in record.items() if v is not None and v != ""}
+                    fts_text = " ".join(
+                        str(record.get(f, "")) for f in text_fields if record.get(f)
+                    )
+                    payload["_fts_text"] = fts_text
+                    for field in text_fields:
+                        payload[f"_fts_{field}"] = str(record.get(field, "") or "")
 
-            if points_batch:
-                batch_num += 1
-                if batch_num >= start_from_batch:
-                    _do_upsert_batch(points_batch, batch_num)
-                    points_batch = []
+                    vector: dict = {}
+                    if mode in ("hybrid", "vector") and vec is not None:
+                        vector["dense"] = vec
+                    if mode == "hybrid":
+                        vector["sparse"] = qmodels.Document(text=fts_text, model="Qdrant/bm25")
 
-            upsert_body_done = True
+                    points_batch.append(
+                        qmodels.PointStruct(id=obj_uuid, payload=payload, vector=vector)
+                    )
+
+                if not points_batch:
+                    continue
+
+                self._client.upsert(collection_name=collection, points=points_batch, wait=True)
+                inserted += len(points_batch)
+                if on_batch_done:
+                    on_batch_done(batch_num, inserted, total_records)
+
         finally:
             # Phase 24-02: restore HNSW index (m=16, ef_construct=200) after all upserts.
             # finally block ensures restore runs even if an upsert raises, preventing the
@@ -574,9 +622,6 @@ class QdrantVectorStore(BaseVectorStore):
                     logger.warning(
                         "Staging m=16 restore failed for %r: %s", collection, exc
                     )
-            if not upsert_body_done:
-                # Re-raise if the upsert loop itself raised (finally ran due to exception)
-                raise
 
         logger.info(
             "QdrantVectorStore.index_records: upserted %d points to %r (mode=%r)",

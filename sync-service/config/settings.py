@@ -127,7 +127,7 @@ class SourceConfig(BaseModel):
 
 class EmbeddingConfig(BaseModel):
     type: Literal[
-        "weaviate_builtin", "ollama", "sentence_transformer", "openai", "cohere", "voyage"
+        "weaviate_builtin", "ollama", "tei", "sentence_transformer", "openai", "cohere", "voyage"
     ] = "weaviate_builtin"
     model: str = "text2vec-transformers"
     api_key: str | None = Field(default=None)

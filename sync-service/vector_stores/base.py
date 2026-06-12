@@ -159,6 +159,7 @@ class BaseVectorStore(ABC):
         embedding_adapter: Any = None,
         id_field: str | None = None,
         start_from_batch: int = 0,
+        batch_num_offset: int = 0,
         on_batch_done: Callable[[int, int, int], None] | None = None,
         is_full_index: bool = False,
     ) -> IndexResult:
@@ -171,9 +172,27 @@ class BaseVectorStore(ABC):
             embedding_adapter: BaseEmbeddingAdapter or None (None = server-side vectorization)
             id_field: field name to use as record ID (overrides cfg default if provided)
             start_from_batch: skip already-processed batches (resumable full re-index)
+            batch_num_offset: add this offset to internal batch_num counter so
+                on_batch_done reports global batch numbers when called per-chunk
+                from the streaming pipeline in run_full().
             on_batch_done: callback(batch_num, done_records, total_records) for progress
             is_full_index: when True, implementations may apply bulk-load optimizations
                 (e.g. Qdrant HNSW staging: disables index building during upsert, rebuilds after)
+        """
+
+    def begin_bulk_load(self, collection_name: str, mode: str) -> None:
+        """Called before a streaming full-index bulk upsert.
+
+        Implementations may apply pre-ingestion optimizations here (e.g. Qdrant:
+        disable HNSW index building with m=0 to speed up bulk insert).
+        No-op by default — safe for engines that don't need staging.
+        """
+
+    def end_bulk_load(self, collection_name: str) -> None:
+        """Called after a streaming full-index bulk upsert completes (or fails).
+
+        Implementations restore production settings set in begin_bulk_load
+        (e.g. Qdrant: rebuild HNSW with m=16). No-op by default.
         """
 
     @abstractmethod

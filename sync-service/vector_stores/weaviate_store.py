@@ -92,6 +92,7 @@ class WeaviateVectorStore(BaseVectorStore):
         embedding_adapter: Any = None,
         id_field: str | None = None,
         start_from_batch: int = 0,
+        batch_num_offset: int = 0,
         on_batch_done: Callable[[int, int, int], None] | None = None,
         is_full_index: bool = False,
     ) -> IndexResult:

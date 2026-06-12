@@ -108,17 +108,37 @@ class SyncEngine:
         return self._build_stats(result, skipped=skipped)
 
     def run_full(self, on_progress: Callable[[str, int, int], None] | None = None) -> dict:
-        """Drop + recreate collection + upsert all records from scratch.
+        """Drop + recreate collection + stream all records through fetch→embed→upsert.
 
-        Resumable: se esiste un checkpoint per questa collection, riprende dal batch
-        successivo all'ultimo completato senza riscaricare né ri-droppare.
+        Streaming pipeline: iterates source chunks one at a time via
+        fetch_records_chunked(). RAM stays at O(chunk_size) regardless of dataset
+        size — no more loading 1.5M records into a list before embedding starts.
+
+        Resumable: checkpoint stores last completed batch; resume skips already-
+        processed chunks (fast with keyset pagination — no OFFSET penalty).
+
+        HNSW staging: begin_bulk_load() disables HNSW graph building before the
+        loop; end_bulk_load() in finally restores m=16 after all chunks complete.
+        index_records() is called per-chunk with is_full_index=False so it does
+        not attempt its own staging.
+
+        State: accumulated in-memory across chunks, flushed to disk once at end
+        (avoids writing a growing JSON file 1500× for 1.5M records).
         """
         collection_name = self._cfg.vector_store.collection
+        mode = getattr(self._cfg.vector_store, "search_mode", "hybrid")
 
         # --- Checkpoint: resume o fresh start? -----------------------------------
         ckpt = checkpoint.read(collection_name)
         collection_exists = self._vector_store.index_exists(collection_name)
-        resuming = ckpt is not None and collection_exists
+        # Only resume when at least one batch completed (last_completed_batch >= 0).
+        # A checkpoint at -1 means the collection was recreated but the first upsert
+        # never finished — treat it as a fresh start so drop+create runs again.
+        resuming = (
+            ckpt is not None
+            and collection_exists
+            and ckpt.get("last_completed_batch", -1) >= 0
+        )
 
         if resuming:
             start_from_batch = ckpt["last_completed_batch"] + 1
@@ -133,13 +153,22 @@ class SyncEngine:
                     collection_name,
                 )
             logger.info(
-                "Avvio full re-index (source.type=%r, collection=%r)",
+                "Avvio full re-index streaming (source.type=%r, collection=%r)",
                 self._cfg.source.type, collection_name,
             )
             start_from_batch = 0
             if collection_exists:
                 logger.info("Cancellazione collezione %r...", collection_name)
                 self._vector_store.drop_index(collection_name)
+            # Inject actual embedding dims so Qdrant creates the collection with the
+            # correct vector size. Only when a client-side adapter exists (Ollama/TEI);
+            # weaviate_builtin returns None and handles dims server-side.
+            if self._embedding_adapter is not None:
+                object.__setattr__(
+                    self._cfg.vector_store,
+                    "_embedding_dims",
+                    self._embedding_adapter.dimensions(),
+                )
             self._vector_store.create_index(self._cfg)
             self._state.clear()
             checkpoint.write(collection_name, last_completed_batch=-1)
@@ -147,35 +176,75 @@ class SyncEngine:
 
         if on_progress:
             on_progress("fetching", 0, 0)
-        records = self._source_adapter.fetch_records()
-        logger.info("Sorgente ha restituito %d record per full re-index", len(records))
 
-        def _on_batch_done(batch_num: int, done: int, total: int) -> None:
-            checkpoint.write(collection_name, last_completed_batch=batch_num)
-            if on_progress:
-                on_progress("embedding", done, total)
+        # HNSW staging around the entire streaming loop (restored in finally).
+        self._vector_store.begin_bulk_load(collection_name, mode)
 
-        result = self._vector_store.index_records(
-            records, self._cfg, self._cfg.source.type, self._embedding_adapter,
-            id_field=self._id_field,
-            start_from_batch=start_from_batch,
-            on_batch_done=_on_batch_done,
-            is_full_index=True,
-        )
+        total_inserted = 0
+        total_fetched = 0
+        total_upsert_errors = 0
+        all_state_entries: dict[str, dict] = {}
+        global_batch_num = -1
 
-        # Persist state for all records (both resumed and new batches)
-        self._persist_state(records, result)
+        try:
+            for chunk in self._source_adapter.fetch_records_chunked(chunk_size=_EMBED_BATCH_SIZE):
+                global_batch_num += 1
+                total_fetched += len(chunk)
 
-        # Elimina checkpoint — sync completato con successo
+                if global_batch_num < start_from_batch:
+                    # Chunk fetched (keyset = no OFFSET penalty) but discarded for resume.
+                    continue
+
+                if on_progress:
+                    on_progress("embedding", total_inserted, total_fetched)
+
+                # Capture loop-local value for closure (total_inserted at batch start).
+                _inserted_before_batch = total_inserted
+
+                def _on_batch_done(batch_num: int, done: int, _total: int,
+                                   _ins=_inserted_before_batch) -> None:
+                    checkpoint.write(collection_name, last_completed_batch=batch_num)
+                    if on_progress:
+                        on_progress("embedding", _ins + done, total_fetched)
+
+                result = self._vector_store.index_records(
+                    chunk,
+                    self._cfg,
+                    self._cfg.source.type,
+                    self._embedding_adapter,
+                    id_field=self._id_field,
+                    start_from_batch=0,
+                    batch_num_offset=global_batch_num,
+                    on_batch_done=_on_batch_done,
+                    is_full_index=False,
+                )
+
+                total_inserted += result.inserted
+                total_upsert_errors += result.skipped
+                all_state_entries.update(self._compute_state_entries(chunk))
+
+        finally:
+            self._vector_store.end_bulk_load(collection_name)
+
+        # Single bulk_set write for all state (avoids N disk writes during streaming).
+        if all_state_entries:
+            logger.info("Persisting state per %d record (single write)...", len(all_state_entries))
+            self._state.bulk_set(all_state_entries)
+            logger.info("State persistito.")
+
         checkpoint.delete(collection_name)
 
-        # Aggiorna model_version.json per evitare re-index spurio al prossimo avvio.
         try:
             self._write_model_version_fn(self._cfg.embedding.model)
         except OSError as exc:
             logger.warning("Could not update model_version.json after full re-index: %s", exc)
 
-        stats = self._build_stats(result, skipped=0)
+        streaming_result = IndexResult(
+            inserted=total_inserted,
+            updated=0,
+            skipped=total_upsert_errors,
+        )
+        stats = self._build_stats(streaming_result, skipped=0)
         if resuming:
             stats["resumed_from_batch"] = start_from_batch
         return stats
@@ -184,12 +253,8 @@ class SyncEngine:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _persist_state(self, records: list[dict], result: Any) -> None:
-        """Aggiorna StateStore per tutti i record upsertati con successo.
-
-        Usa bulk_set per costruire il dict in memoria e scrivere su disco
-        una sola volta — evita O(n²) scritture su dataset grandi.
-        """
+    def _compute_state_entries(self, records: list[dict]) -> dict[str, dict]:
+        """Compute state dict for a list of records without writing to disk."""
         now_iso = datetime.now(tz=timezone.utc).isoformat()
         entries: dict[str, dict] = {}
         for record in records:
@@ -201,6 +266,11 @@ class SyncEngine:
                 "synced_at": now_iso,
                 "weaviate_uuid": weaviate_uuid,
             }
+        return entries
+
+    def _persist_state(self, records: list[dict], result: Any) -> None:
+        """Aggiorna StateStore per tutti i record upsertati con successo (single write)."""
+        entries = self._compute_state_entries(records)
         logger.info("Persisting state per %d record (single write)...", len(entries))
         self._state.bulk_set(entries)
         logger.info("State persistito.")

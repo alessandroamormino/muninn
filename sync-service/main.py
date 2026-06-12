@@ -106,6 +106,18 @@ async def lifespan(app: FastAPI):
                     _ecoll,
                 )
                 vector_store.drop_index(_ecoll)
+    # Probe actual embedding dims so create_index uses the correct vector size.
+    # Wrapped in try/except: if Ollama is not yet up at startup the collection
+    # likely already exists (normal restart), so wrong dims are harmless here.
+    # The critical injection is in engine.run_full() which runs when Ollama is active.
+    try:
+        _startup_emb = build_embedding_adapter(settings.embedding)
+        object.__setattr__(settings.vector_store, "_embedding_dims", _startup_emb.dimensions())
+    except Exception as _dims_exc:
+        logger.warning(
+            "Could not probe embedding dims at startup (collection may use wrong dims if new): %s",
+            _dims_exc,
+        )
     created = vector_store.create_index(settings)
     if created:
         logger.info("Collection %r created.", settings.vector_store.collection)

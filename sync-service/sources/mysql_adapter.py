@@ -8,6 +8,10 @@ Two-query strategy for aggregate joins (D-05):
   1. Single LEFT JOIN query for aggregate=false joins (many-to-one).
   2. Separate SELECT per aggregate=true join, results grouped in Python.
 
+Pagination: keyset (WHERE id > :last_id ORDER BY id) — O(1) per page vs LIMIT/OFFSET O(n).
+  fetch_records_chunked() yields one chunk at a time; RAM stays at O(chunk_size).
+  fetch_records() accumulates all chunks for backward compat with incremental sync.
+
 Security notes:
   - Credentials are resolved from env vars only — never logged (T-14-02).
   - SSL connect_args use short keys ("ca"/"cert"/"key") as required by PyMySQL (Pitfall 2 / T-14-03).
@@ -19,7 +23,7 @@ import hashlib
 import logging
 from collections import defaultdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Iterator
 
 from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import Engine
@@ -126,18 +130,27 @@ class MySQLAdapter(BaseSourceAdapter):
     # ------------------------------------------------------------------
 
     def fetch_records(self) -> list[dict]:
-        """Fetch all records from the MySQL source.
+        """Fetch all records from the MySQL source (loads everything into memory).
 
-        Executes:
-          1. Main LEFT JOIN SELECT (with aggregate=false joins) paginated by LIMIT/OFFSET.
-          2. One SELECT per aggregate=true join, grouped in Python.
+        Used by run_incremental() and small-dataset callers. For large datasets
+        use fetch_records_chunked() to avoid loading all records at once.
+        """
+        all_records: list[dict] = []
+        for chunk in self.fetch_records_chunked(self._chunk_size):
+            all_records.extend(chunk)
+        return all_records
 
-        SQLAlchemy OperationalError / DBAPIError are wrapped in AdapterError.
+    def fetch_records_chunked(self, chunk_size: int = 1000) -> Iterator[list[dict]]:
+        """Yield chunks of records using keyset pagination (O(1) per page).
+
+        Each chunk has at most chunk_size records. Aggregate joins are applied
+        per-chunk so the IN-clause stays small (chunk_size IDs max).
+        RAM stays at O(chunk_size) regardless of total dataset size.
         """
         try:
-            main = self._fetch_main()
-            self._apply_aggregate_joins(main)
-            return main
+            for chunk in self._fetch_chunked_keyset(chunk_size):
+                self._apply_aggregate_joins(chunk)
+                yield chunk
         except (OperationalError, DBAPIError) as exc:
             host = _resolve_env_vars(self._cfg.host)
             port = self._cfg.port
@@ -173,21 +186,25 @@ class MySQLAdapter(BaseSourceAdapter):
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _fetch_main(self) -> list[dict]:
-        """Execute the main paginated SELECT (with aggregate=false LEFT JOINs) and return all rows.
+    def _fetch_chunked_keyset(self, chunk_size: int) -> Iterator[list[dict]]:
+        """Yield chunks of main-table rows using keyset pagination.
 
-        Column names from declarative config are safe — they come from Pydantic-validated
-        config, not from user input (T-14-01).
+        Uses WHERE id > :last_id ORDER BY id LIMIT :chunk_size — O(1) per page
+        unlike LIMIT/OFFSET which degrades to O(n) as offset grows.
+
+        Assumes id_field is indexed (primary key). Each call opens its own
+        connection so idle connections are released back to the pool between pages.
+
+        Column names come from Pydantic-validated config (T-14-01).
         """
         cfg = self._cfg.query
         flat_joins = [j for j in cfg.joins if not j.aggregate]
 
-        # Build column list: main table columns
+        # Build SELECT column list
         main_fields_sql = ", ".join(
             f"`{cfg.from_table}`.`{f}`" for f in cfg.fields
         ) if cfg.fields else f"`{cfg.from_table}`.*"
 
-        # Add flat-join columns aliased with table prefix (e.g. reparti__nome_reparto)
         join_col_parts: list[str] = []
         for jcfg in flat_joins:
             for field in jcfg.fields:
@@ -198,49 +215,56 @@ class MySQLAdapter(BaseSourceAdapter):
         if join_col_parts:
             all_cols_sql += ", " + ", ".join(join_col_parts)
 
-        # Build LEFT JOIN clauses for flat joins
         join_clauses = ""
         for jcfg in flat_joins:
             join_clauses += f" LEFT JOIN `{jcfg.table}` ON {jcfg.on}"
 
-        base_sql = (
-            f"SELECT {all_cols_sql} FROM `{cfg.from_table}`{join_clauses}"
-        )
-
-        all_rows: list[dict] = []
-        offset = 0
+        base_sql = f"SELECT {all_cols_sql} FROM `{cfg.from_table}`{join_clauses}"
+        id_col = f"`{cfg.from_table}`.`{cfg.id_field}`"
 
         assert self._engine is not None  # guaranteed by __init__
 
-        with self._engine.connect() as conn:
-            while True:
-                stmt = text(f"{base_sql} LIMIT :limit OFFSET :offset")
-                rows = conn.execute(
-                    stmt, {"limit": self._chunk_size, "offset": offset}
-                ).mappings().all()
+        last_id: Any = None
 
-                for row in rows:
-                    record: dict = {}
-                    # Copy main table columns
-                    for f in cfg.fields:
-                        record[f] = row[f]
-                    # Merge flat join columns — strip the table prefix
-                    for jcfg in flat_joins:
-                        for field in jcfg.fields:
-                            alias = f"{jcfg.table}__{field}"
-                            # Determine target key name
-                            if len(jcfg.fields) == 1:
-                                target_key = jcfg.as_ or field
-                            else:
-                                target_key = jcfg.as_ or f"{jcfg.table}_{field}"
-                            record[target_key] = row[alias] if alias in row else row.get(field)
-                    all_rows.append(record)
+        while True:
+            if last_id is None:
+                stmt = text(f"{base_sql} ORDER BY {id_col} LIMIT :limit")
+                params: dict = {"limit": chunk_size}
+            else:
+                stmt = text(
+                    f"{base_sql} WHERE {id_col} > :last_id"
+                    f" ORDER BY {id_col} LIMIT :limit"
+                )
+                params = {"last_id": last_id, "limit": chunk_size}
 
-                if len(rows) < self._chunk_size:
-                    break
-                offset += self._chunk_size
+            # One connection per page — released to pool between pages.
+            with self._engine.connect() as conn:
+                rows = conn.execute(stmt, params).mappings().all()
 
-        return all_rows
+            if not rows:
+                break
+
+            chunk: list[dict] = []
+            for row in rows:
+                record: dict = {}
+                for f in cfg.fields:
+                    record[f] = row[f]
+                for jcfg in flat_joins:
+                    for field in jcfg.fields:
+                        alias = f"{jcfg.table}__{field}"
+                        if len(jcfg.fields) == 1:
+                            target_key = jcfg.as_ or field
+                        else:
+                            target_key = jcfg.as_ or f"{jcfg.table}_{field}"
+                        record[target_key] = row[alias] if alias in row else row.get(field)
+                chunk.append(record)
+
+            yield chunk
+
+            if len(rows) < chunk_size:
+                break
+
+            last_id = rows[-1][cfg.id_field]
 
     def _apply_aggregate_joins(self, main_records: list[dict]) -> None:
         """Execute one SELECT per aggregate=true join and merge results into main_records.
