@@ -252,6 +252,11 @@ class OpenAIEmbeddingAdapter(BaseEmbeddingAdapter):
             )
 
         # --- Download and parse output ---
+        if not batch.output_file_id:
+            raise OpenAIEmbeddingError(
+                f"OpenAI batch {batch.id} completed but output_file_id is None "
+                f"(transient finalization delay — retry later, key: {self._masked_key})"
+            )
         content = self._client.files.content(batch.output_file_id)
         vectors = _parse_batch_output(content, n)
 

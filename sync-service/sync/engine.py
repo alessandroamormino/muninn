@@ -62,6 +62,12 @@ class _PrecomputedAdapter:
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Return the next len(texts) precomputed vectors, advancing the cursor."""
         n = len(texts)
+        if self._cursor + n > len(self._vectors):
+            raise RuntimeError(
+                f"_PrecomputedAdapter cursor overrun: requested {n} vectors at offset "
+                f"{self._cursor} but only {len(self._vectors)} total — "
+                "texts/records count mismatch between embed_batch_async and index_records"
+            )
         result = self._vectors[self._cursor: self._cursor + n]
         self._cursor += n
         return result
