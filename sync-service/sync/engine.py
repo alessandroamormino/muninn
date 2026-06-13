@@ -9,6 +9,13 @@ Dipende da:
   - BaseVectorStore (vector_stores/base.py) — engine-agnostic interface
   - build_source_adapter (sources/__init__.py)
   - write_stored_model (weaviate_store/model_version.py) — still model_version.json
+
+Batch API path (Plan 25-02):
+  When the embedding adapter exposes ``supports_batch_api=True`` (only
+  ``OpenAIEmbeddingAdapter`` with ``openai_batch: true``), ``run_full()`` loads
+  ALL records into RAM at once, calls ``embed_batch_async()``, then upserts the
+  full result in a single ``index_records()`` call via ``_PrecomputedAdapter``.
+  The streaming path (``fetch_records_chunked``) is unchanged for all other adapters.
 """
 from __future__ import annotations
 
@@ -32,6 +39,42 @@ _EMBED_BATCH_SIZE = 1000
 
 def _default_write_model_version(model: str) -> None:
     write_stored_model(model)
+
+
+class _PrecomputedAdapter:
+    """Wraps precomputed vectors so index_records can call embed() per chunk.
+
+    Used by run_full() in the Batch API path: after ``embed_batch_async()`` returns
+    all vectors, this adapter serves them slice-by-slice as index_records processes
+    each internal batch. ``embed()`` reads from the precomputed list in order,
+    advancing a cursor with each call.
+
+    ``dimensions()`` and ``model_name()`` forward to the real source adapter so
+    that collection schema creation and model_version detection use the correct
+    values from the configured embedding model.
+    """
+
+    def __init__(self, vectors: list[list[float]], source_adapter: Any) -> None:
+        self._vectors = vectors
+        self._source = source_adapter  # real adapter for dimensions/model_name forwarding
+        self._cursor = 0
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Return the next len(texts) precomputed vectors, advancing the cursor."""
+        n = len(texts)
+        result = self._vectors[self._cursor: self._cursor + n]
+        self._cursor += n
+        return result
+
+    def dimensions(self) -> int:
+        """Forward to the real adapter for schema creation."""
+        if self._vectors:
+            return len(self._vectors[0])
+        return self._source.dimensions()
+
+    def model_name(self) -> str:
+        """Forward to the real adapter for model_version detection."""
+        return self._source.model_name()
 
 
 class SyncEngine:
@@ -177,51 +220,112 @@ class SyncEngine:
         if on_progress:
             on_progress("fetching", 0, 0)
 
-        # HNSW staging around the entire streaming loop (restored in finally).
+        # Detect Batch API mode (only OpenAIEmbeddingAdapter with openai_batch=True).
+        # getattr with default=False is safe for all other adapters that do not expose
+        # the property.
+        use_batch_api = getattr(self._embedding_adapter, "supports_batch_api", False)
+
+        # HNSW staging around the entire bulk upsert (restored in finally).
+        # Both batch and streaming paths execute inside this try/finally.
         self._vector_store.begin_bulk_load(collection_name, mode)
 
         total_inserted = 0
         total_fetched = 0
         total_upsert_errors = 0
         all_state_entries: dict[str, dict] = {}
-        global_batch_num = -1
 
         try:
-            for chunk in self._source_adapter.fetch_records_chunked(chunk_size=_EMBED_BATCH_SIZE):
-                global_batch_num += 1
-                total_fetched += len(chunk)
-
-                if global_batch_num < start_from_batch:
-                    # Chunk fetched (keyset = no OFFSET penalty) but discarded for resume.
-                    continue
+            if use_batch_api:
+                # --- OpenAI Batch API path (Plan 25-02) ---
+                # Full load: all records into RAM at once, then single batch submission.
+                # Trade RAM for 50% cost reduction and ~2.5h wall-clock at Tier 1 limits.
+                logger.info(
+                    "OpenAI Batch API path active for %r — loading all records upfront "
+                    "(may consume significant RAM for large datasets)",
+                    collection_name,
+                )
 
                 if on_progress:
-                    on_progress("embedding", total_inserted, total_fetched)
+                    on_progress("fetching", 0, 0)
 
-                # Capture loop-local value for closure (total_inserted at batch start).
-                _inserted_before_batch = total_inserted
+                records = self._source_adapter.fetch_records()
+                total_fetched = len(records)
 
-                def _on_batch_done(batch_num: int, done: int, _total: int,
-                                   _ins=_inserted_before_batch) -> None:
-                    checkpoint.write(collection_name, last_completed_batch=batch_num)
-                    if on_progress:
-                        on_progress("embedding", _ins + done, total_fetched)
+                if on_progress:
+                    on_progress("embedding", 0, total_fetched)
+
+                # Build text representations using the same inline pattern as qdrant_store.py
+                field_names = list((self._cfg.vector_store.text_fields or {}).keys())
+                texts = [
+                    " ".join(str(r.get(f, "")) for f in field_names if r.get(f))
+                    for r in records
+                ]
+
+                # Call embed_batch_async — submits JSONL to OpenAI, polls, downloads results
+                vectors = self._embedding_adapter.embed_batch_async(
+                    texts,
+                    collection_name=collection_name,
+                )
+
+                # Wrap precomputed vectors in an adapter so index_records can call embed()
+                # per its internal batch loop without knowing about Batch API internals.
+                precomputed_adapter = _PrecomputedAdapter(vectors, self._embedding_adapter)
 
                 result = self._vector_store.index_records(
-                    chunk,
+                    records,
                     self._cfg,
                     self._cfg.source.type,
-                    self._embedding_adapter,
+                    precomputed_adapter,
                     id_field=self._id_field,
                     start_from_batch=0,
-                    batch_num_offset=global_batch_num,
-                    on_batch_done=_on_batch_done,
+                    batch_num_offset=0,
+                    on_batch_done=None,
                     is_full_index=False,
                 )
 
-                total_inserted += result.inserted
-                total_upsert_errors += result.skipped
-                all_state_entries.update(self._compute_state_entries(chunk))
+                total_inserted = result.inserted
+                total_upsert_errors = result.skipped
+                all_state_entries = self._compute_state_entries(records)
+
+            else:
+                # --- Streaming path (unchanged for all non-batch adapters) ---
+                global_batch_num = -1
+
+                for chunk in self._source_adapter.fetch_records_chunked(chunk_size=_EMBED_BATCH_SIZE):
+                    global_batch_num += 1
+                    total_fetched += len(chunk)
+
+                    if global_batch_num < start_from_batch:
+                        # Chunk fetched (keyset = no OFFSET penalty) but discarded for resume.
+                        continue
+
+                    if on_progress:
+                        on_progress("embedding", total_inserted, total_fetched)
+
+                    # Capture loop-local value for closure (total_inserted at batch start).
+                    _inserted_before_batch = total_inserted
+
+                    def _on_batch_done(batch_num: int, done: int, _total: int,
+                                       _ins=_inserted_before_batch) -> None:
+                        checkpoint.write(collection_name, last_completed_batch=batch_num)
+                        if on_progress:
+                            on_progress("embedding", _ins + done, total_fetched)
+
+                    result = self._vector_store.index_records(
+                        chunk,
+                        self._cfg,
+                        self._cfg.source.type,
+                        self._embedding_adapter,
+                        id_field=self._id_field,
+                        start_from_batch=0,
+                        batch_num_offset=global_batch_num,
+                        on_batch_done=_on_batch_done,
+                        is_full_index=False,
+                    )
+
+                    total_inserted += result.inserted
+                    total_upsert_errors += result.skipped
+                    all_state_entries.update(self._compute_state_entries(chunk))
 
         finally:
             self._vector_store.end_bulk_load(collection_name)
