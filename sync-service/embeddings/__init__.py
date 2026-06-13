@@ -13,6 +13,9 @@ def build_embedding_adapter(embedding_cfg) -> BaseEmbeddingAdapter | None:
         return OllamaEmbeddingAdapter(embedding_cfg)
     if embedding_cfg.type == "tei":
         return TEIEmbeddingAdapter(embedding_cfg)
+    if embedding_cfg.type == "openai":
+        from embeddings.openai_adapter import OpenAIEmbeddingAdapter  # lazy import (openai v2 may not be installed on host)
+        return OpenAIEmbeddingAdapter(embedding_cfg)
     # weaviate_builtin delegates vectorization to Weaviate server-side — no adapter needed
     return None
 
@@ -21,5 +24,6 @@ __all__ = [
     "WeaviateBuiltinAdapter",
     "OllamaEmbeddingAdapter",
     "TEIEmbeddingAdapter",
+    "OpenAIEmbeddingAdapter",
     "build_embedding_adapter",
 ]

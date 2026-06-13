@@ -19,6 +19,9 @@ pymysql>=1.2.0,<2.0.0
 pymongo>=4.7.0,<5.0.0
 requests>=2.31.0,<3.0.0
 
+# Embedding providers (Phase 25 — OpenAIEmbeddingAdapter)
+openai>=1.0.0,<3.0.0
+
 # File upload
 python-multipart>=0.0.9,<1.0.0
 
