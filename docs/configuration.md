@@ -594,7 +594,6 @@ After changing the vector store engine you must:
 
 | Feature | Qdrant | Weaviate |
 |---|---|---|
-| **Default (recommended)** | ✅ since Phase 15 | ✅ original POC default |
 | **Language** | Rust | Go |
 | **RAM optimization** | `on_disk` memmap + SQ/BQ | SQ/PQ/BQ quantization |
 | **Product Quantization (PQ)** | ❌ not supported | ✅ |
