@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 from qdrant_client import QdrantClient
@@ -42,7 +43,8 @@ from vector_stores.fuzzy import _apply_fuzzy_expansion
 
 logger = logging.getLogger(__name__)
 
-_EMBED_BATCH_SIZE = 1000       # embedding modes: limited by Ollama throughput
+_EMBED_BATCH_SIZE = 10_000     # records per index_records call; OpenAI adapter sub-batches internally
+_QDRANT_UPSERT_BATCH = 3_000  # points per gRPC upsert; protobuf ~18MB at 1536 dims (3× smaller than JSON)
 _FTS_UPSERT_BATCH_SIZE = 100  # fts/bm25: no embedding, larger batches = fewer round-trips
 
 # Phase 23: fuzzy expansion vocabulary, keyed by collection name.
@@ -161,6 +163,9 @@ class QdrantVectorStore(BaseVectorStore):
         self._client: Any = None  # QdrantClient | None
         # Tracks active HNSW staging per collection (begin_bulk_load / end_bulk_load).
         self._staging_active: dict[str, bool] = {}
+        # Thread-local storage for per-thread QdrantClient instances used in parallel upserts.
+        # Each thread gets its own client so model_embedder._embed_storage is never shared.
+        self._thread_local = threading.local()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -168,8 +173,8 @@ class QdrantVectorStore(BaseVectorStore):
 
     def open(self) -> None:
         """Open connection to Qdrant."""
-        self._client = QdrantClient(url=self._url)
-        logger.info("QdrantVectorStore: connected to %s", self._url)
+        self._client = QdrantClient(url=self._url, prefer_grpc=True)
+        logger.info("QdrantVectorStore: connected to %s (gRPC preferred)", self._url)
 
     def close(self) -> None:
         """Close connection. Safe to call when not open."""
@@ -378,6 +383,13 @@ class QdrantVectorStore(BaseVectorStore):
                 "QdrantVectorStore end_bulk_load: HNSW rebuilt (m=16, ef_construct=200) for %r",
                 collection_name,
             )
+            # Nudge the optimizer so it re-evaluates segment index state immediately.
+            # Without this, Qdrant may stay yellow after m=0→m=16 restore until the
+            # background optimizer timer fires (collection is fully indexed but stuck yellow).
+            self._client.update_collection(
+                collection_name=collection_name,
+                optimizers_config=qmodels.OptimizersConfigDiff(indexing_threshold=10000),
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "end_bulk_load: m=16 restore failed for %r: %s", collection_name, exc
@@ -567,17 +579,28 @@ class QdrantVectorStore(BaseVectorStore):
                 else:
                     batch_vecs = [None] * len(batch_records)
 
+                # Pre-compute BM25 sparse vectors in one batch call before building PointStructs.
+                # This avoids the qdrant-client model_embedder thread-safety issue and allows
+                # parallel upsert threads to do pure I/O (GIL-releasing) instead of CPU-bound BM25.
+                fts_texts = [
+                    " ".join(str(r.get(f, "")) for f in text_fields if r.get(f))
+                    for r in batch_records
+                ]
+                sparse_vecs: list[Any] = []
+                if mode == "hybrid":
+                    sparse_vecs = list(self._client._sparse_embed_documents(
+                        fts_texts, embedding_model_name="Qdrant/bm25"
+                    ))
+
                 # Build PointStructs for this batch
                 points_batch: list = []
-                for record, vec in zip(batch_records, batch_vecs):
+                for idx, (record, vec) in enumerate(zip(batch_records, batch_vecs)):
                     raw_id = record.get(id_field)
                     if raw_id is None or raw_id == "":
                         continue
                     obj_uuid = str(compute_record_uuid(source_type, str(raw_id)))
                     payload = {k: v for k, v in record.items() if v is not None and v != ""}
-                    fts_text = " ".join(
-                        str(record.get(f, "")) for f in text_fields if record.get(f)
-                    )
+                    fts_text = fts_texts[idx]
                     payload["_fts_text"] = fts_text
                     for field in text_fields:
                         payload[f"_fts_{field}"] = str(record.get(field, "") or "")
@@ -585,8 +608,8 @@ class QdrantVectorStore(BaseVectorStore):
                     vector: dict = {}
                     if mode in ("hybrid", "vector") and vec is not None:
                         vector["dense"] = vec
-                    if mode == "hybrid":
-                        vector["sparse"] = qmodels.Document(text=fts_text, model="Qdrant/bm25")
+                    if mode == "hybrid" and sparse_vecs:
+                        vector["sparse"] = sparse_vecs[idx]
 
                     points_batch.append(
                         qmodels.PointStruct(id=obj_uuid, payload=payload, vector=vector)
@@ -595,7 +618,22 @@ class QdrantVectorStore(BaseVectorStore):
                 if not points_batch:
                     continue
 
-                self._client.upsert(collection_name=collection, points=points_batch, wait=True)
+                sub_batches = [
+                    points_batch[i: i + _QDRANT_UPSERT_BATCH]
+                    for i in range(0, len(points_batch), _QDRANT_UPSERT_BATCH)
+                ]
+                def _do_upsert(batch: list, url: str = self._url, coll: str = collection) -> None:
+                    # Each thread gets its own QdrantClient so model_embedder._embed_storage
+                    # is never shared across threads (qdrant-client is not thread-safe).
+                    if not hasattr(self._thread_local, "client"):
+                        self._thread_local.client = QdrantClient(url=url, prefer_grpc=True)
+                    self._thread_local.client.upsert(
+                        collection_name=coll, points=batch, wait=True,
+                    )
+                with ThreadPoolExecutor(max_workers=len(sub_batches)) as ex:
+                    futures = [ex.submit(_do_upsert, b) for b in sub_batches]
+                    for f in as_completed(futures):
+                        f.result()  # re-raise any exception from the worker
                 inserted += len(points_batch)
                 if on_batch_done:
                     on_batch_done(batch_num, inserted, total_records)
