@@ -33,8 +33,9 @@ from weaviate_store.model_version import write_stored_model
 
 logger = logging.getLogger(__name__)
 
-# Batch size constant (mirrors weaviate_store/upsert.py _EMBED_BATCH_SIZE)
-_EMBED_BATCH_SIZE = 1000
+# Chunk size for MySQL fetch + qdrant_store index_records call.
+# OpenAI adapter splits internally into concurrent sub-batches of 2048.
+_EMBED_BATCH_SIZE = 10_000
 
 
 def _default_write_model_version(model: str) -> None:
@@ -191,9 +192,10 @@ class SyncEngine:
 
         if resuming:
             start_from_batch = ckpt["last_completed_batch"] + 1
+            already_done = start_from_batch * _EMBED_BATCH_SIZE
             logger.info(
                 "RESUME full re-index %r dal batch %d (già processati: ~%d record).",
-                collection_name, start_from_batch, start_from_batch * _EMBED_BATCH_SIZE,
+                collection_name, start_from_batch, already_done,
             )
         else:
             if ckpt is not None and not collection_exists:
@@ -205,6 +207,7 @@ class SyncEngine:
                 "Avvio full re-index streaming (source.type=%r, collection=%r)",
                 self._cfg.source.type, collection_name,
             )
+            already_done = 0
             start_from_batch = 0
             if collection_exists:
                 logger.info("Cancellazione collezione %r...", collection_name)
@@ -223,8 +226,17 @@ class SyncEngine:
             checkpoint.write(collection_name, last_completed_batch=-1)
         # -------------------------------------------------------------------------
 
+        # Pre-count total records so the progress bar has a fixed denominator from the start.
+        known_total: int | None = None
+        count_fn = getattr(self._source_adapter, "count_records", None)
+        if count_fn is not None:
+            try:
+                known_total = count_fn()
+            except Exception:
+                known_total = None
+
         if on_progress:
-            on_progress("fetching", 0, 0)
+            on_progress("fetching", already_done, known_total or 0)
 
         # Detect Batch API mode (only OpenAIEmbeddingAdapter with openai_batch=True).
         # getattr with default=False is safe for all other adapters that do not expose
@@ -305,17 +317,21 @@ class SyncEngine:
                         # Chunk fetched (keyset = no OFFSET penalty) but discarded for resume.
                         continue
 
+                    _progress_total = known_total or total_fetched
                     if on_progress:
-                        on_progress("embedding", total_inserted, total_fetched)
+                        on_progress("embedding", already_done + total_inserted, _progress_total)
 
-                    # Capture loop-local value for closure (total_inserted at batch start).
+                    # Capture loop-local values for closure.
                     _inserted_before_batch = total_inserted
+                    _pt = _progress_total
 
                     def _on_batch_done(batch_num: int, done: int, _total: int,
-                                       _ins=_inserted_before_batch) -> None:
+                                       _ins=_inserted_before_batch,
+                                       _pt=_pt,
+                                       _ad=already_done) -> None:
                         checkpoint.write(collection_name, last_completed_batch=batch_num)
                         if on_progress:
-                            on_progress("embedding", _ins + done, total_fetched)
+                            on_progress("embedding", _ad + _ins + done, _pt)
 
                     result = self._vector_store.index_records(
                         chunk,

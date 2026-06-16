@@ -159,6 +159,14 @@ class MySQLAdapter(BaseSourceAdapter):
                 f"MySQLAdapter failed to fetch records from {host}:{port}/{database}: {exc}"
             ) from exc
 
+    def count_records(self) -> int | None:
+        """Return total row count via SELECT COUNT(*) for accurate progress tracking."""
+        cfg = self._cfg.query
+        stmt = text(f"SELECT COUNT(*) FROM `{cfg.from_table}`")
+        assert self._engine is not None
+        with self._engine.connect() as conn:
+            return conn.execute(stmt).scalar()
+
     def fetch_new_records(self, since: datetime) -> list[dict]:
         """Return all records (same as fetch_records).
 

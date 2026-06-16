@@ -43,10 +43,25 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
     app_state.sync_progress = {"phase": "fetching", "total": 0, "done": 0, "percent": 0.0,
                                "elapsed_seconds": 0, "eta_seconds": None}
 
+    # _resume_offset: records already in the index before this run started.
+    # Set on the very first progress call (phase="fetching"):
+    #   - fresh run  → done=0 → offset=0  → work_this_run = done (correct)
+    #   - resume run → done=already_done  → offset=already_done (correct)
+    # ETA is then based only on THIS run's elapsed/work ratio.
+    _resume_offset: list[int | None] = [None]
+
     def _on_progress(phase: str, done: int, total: int) -> None:
         elapsed = time.perf_counter() - _t0
+        if _resume_offset[0] is None:
+            _resume_offset[0] = done  # captured exactly once on first call
+        work_this_run = done - _resume_offset[0]
         percent = round(done / total * 100, 1) if total > 0 else 0.0
-        eta = int(elapsed / done * (total - done)) if done > 0 else None
+        # Require at least 10s elapsed + meaningful work so the rate estimate is stable.
+        eta = (
+            int(elapsed / work_this_run * (total - done))
+            if work_this_run > 0 and elapsed >= 10.0
+            else None
+        )
         app_state.sync_progress = {
             "phase": phase,
             "total": total,
