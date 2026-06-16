@@ -26,6 +26,7 @@ import pathlib
 import random
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
@@ -41,8 +42,11 @@ _MODEL_DIMS: dict[str, int] = {
     "text-embedding-3-large": 3072,
 }
 _INITIAL_DELAY = 1.0   # seconds before first retry
-_MAX_DELAY = 60.0      # maximum sleep cap in seconds
-_JITTER_FACTOR = 0.25  # ±25% jitter on computed delay
+_MAX_DELAY = 120.0     # maximum sleep cap; 120s gives rate-limit windows time to clear
+_JITTER_FACTOR = 0.5   # ±50% jitter spreads concurrent workers across a 60s window on max delay
+_OPENAI_MAX_BATCH = 200    # texts per request; 200 × ~375 tokens avg = ~75K, safely under the 300K limit
+_OPENAI_MAX_CHARS = 1500   # truncate texts longer than this (~375 tokens) before embedding
+_CONCURRENT_WORKERS = 3    # 3 workers: ~136m ETA with low thundering-herd risk (5→429 cascades)
 
 # Batch API constants (Plan 25-02)
 _BATCH_POLL_INTERVAL = 30.0          # seconds between polls
@@ -102,12 +106,40 @@ class OpenAIEmbeddingAdapter(BaseEmbeddingAdapter):
         """Return embedding vectors for ``texts``.
 
         Returns ``[]`` immediately for an empty input without calling the API.
+        Splits inputs exceeding _OPENAI_MAX_BATCH (2048) into concurrent sub-batches
+        to maximise throughput without exceeding the per-request limit.
         """
         if not texts:
             return []
-        return _embed_with_retry(
-            self._client, texts, self._model, self._max_retries, self._masked_key
+        # Truncate texts that exceed the per-text character limit to avoid
+        # hitting the 300K tokens-per-request limit with long product descriptions.
+        texts = [t[:_OPENAI_MAX_CHARS] if len(t) > _OPENAI_MAX_CHARS else t for t in texts]
+        if len(texts) <= _OPENAI_MAX_BATCH:
+            return _embed_with_retry(
+                self._client, texts, self._model, self._max_retries, self._masked_key
+            )
+        # Split into sub-batches and embed concurrently.
+        sub_batches = [
+            texts[i: i + _OPENAI_MAX_BATCH]
+            for i in range(0, len(texts), _OPENAI_MAX_BATCH)
+        ]
+        n_workers = min(_CONCURRENT_WORKERS, len(sub_batches))
+        logger.info(
+            "OpenAI embed: %d texts → %d sub-batches × %d workers",
+            len(texts), len(sub_batches), n_workers,
         )
+        results: list[list[list[float]] | None] = [None] * len(sub_batches)
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = {
+                executor.submit(
+                    _embed_with_retry,
+                    self._client, batch, self._model, self._max_retries, self._masked_key,
+                ): idx
+                for idx, batch in enumerate(sub_batches)
+            }
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+        return [vec for batch_result in results for vec in batch_result]  # type: ignore[union-attr]
 
     def dimensions(self) -> int:
         """Return the vector dimension for the configured model.
@@ -283,7 +315,7 @@ def _mask_key(key: str) -> str:
         _mask_key("abc")                      # "****"  (too short)
         _mask_key("")                         # "****"
     """
-    if not key or len(key) < 6:
+    if not key or len(key) <= 5:
         return "****"
     return key[:5] + "****"
 

@@ -194,10 +194,10 @@ class TestRetry:
             adapter = OpenAIEmbeddingAdapter(cfg)
             adapter.embed(["t"])
 
-        # sleep was called; value should be within ±25% jitter of 5.0
+        # sleep was called; value should be within ±50% jitter of 5.0
         assert mock_sleep.call_count >= 1
         sleep_val = mock_sleep.call_args[0][0]
-        assert 5.0 - 1.25 <= sleep_val <= 5.0 + 1.25
+        assert 5.0 - 2.5 <= sleep_val <= 5.0 + 2.5
 
 
 # ---------------------------------------------------------------------------

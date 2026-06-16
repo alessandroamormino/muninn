@@ -133,7 +133,7 @@ class EmbeddingConfig(BaseModel):
     api_key: str | None = Field(default=None)
     endpoint: str | None = Field(default=None)  # used by ollama adapter
     openai_batch: bool = False  # True = use Batch API (Plan 25-02); False = sync path (Plan 25-01)
-    max_retries: int = 5  # retries on HTTP 429; 0 = fail immediately
+    max_retries: int = 10  # retries on HTTP 429; 0 = fail immediately
 
 
 class FtsConfig(BaseModel):
