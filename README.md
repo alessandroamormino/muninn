@@ -7,7 +7,8 @@ Self-hosted semantic search engine — point it at any data source, run `docker-
 smart-search indexes your data into a local [Weaviate](https://weaviate.io/) vector database using [Ollama](https://ollama.com/) embeddings and exposes a REST API for hybrid semantic + keyword search. A React web GUI lets you manage collections, run syncs, explore logs, and visualize data as a knowledge graph.
 
 ```
-CSV / JSON / REST API  →  sync-service  →  Weaviate  →  GET /search?q=...
+CSV / JSON / MySQL / REST API  →  sync-service  →  Qdrant / Weaviate  →  GET /search?q=...
+                                    (Ollama or OpenAI embeddings)
 ```
 
 ## Quick Start
@@ -41,12 +42,13 @@ API docs (Swagger): [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ## Services
 
-| Service | Container | Default port |
-|---|---|---|
-| Orchestrator (FastAPI) | `orchestrator` | 8000 |
-| Vector DB (Weaviate) | `vector-db` | 8080 |
-| Web GUI (Nginx + React) | `frontend` | 3000 |
-| Embedder (Ollama) | native on host | 11434 |
+| Service | Container | Default port | Notes |
+|---|---|---|---|
+| Orchestrator (FastAPI) | `orchestrator` | 8000 | Sync + search API |
+| Vector DB (Weaviate) | `vector-db` | 8080 | Default vector store |
+| Vector DB (Qdrant) | `qdrant` | 6333 | Optional: `COMPOSE_PROFILES=qdrant docker-compose up` |
+| Web GUI (Nginx + React) | `frontend` | 3000 | |
+| Embedder (Ollama) | native on host | 11434 | |
 
 > **macOS**: Ollama runs natively to use Metal GPU. On Linux (production), run Ollama as a container and set `OLLAMA_ENDPOINT=http://embedder:11434` in your environment.
 
@@ -57,7 +59,8 @@ API docs (Swagger): [http://localhost:8000/docs](http://localhost:8000/docs)
 | CSV file | `csv` | ✅ |
 | JSON file / URL | `json` | ✅ |
 | REST API (any) | `rest_api` | ✅ |
-| MySQL / PostgreSQL | `mysql` / `postgresql` | Planned |
+| MySQL / MariaDB | `mysql` | ✅ flat queries, JOINs, SSL |
+| PostgreSQL | `postgresql` | Planned |
 | MongoDB | `mongodb` | Planned |
 
 ## Search API
@@ -96,16 +99,24 @@ Returns JSON with `_score` (hybrid BM25 + semantic, higher = better) and `took_m
 | [10 — File Upload API](docs/phases/10-file-upload.md) | Per-collection config, CSV upload via GUI |
 | [11 — Web GUI](docs/phases/11-web-gui.md) | React SPA: Settings, Search, Logs, Knowledge Graph |
 
+## Embedding models
+
+| Adapter | Config `type` | Cost | Notes |
+|---|---|---|---|
+| Ollama (default) | `ollama` | Free | Offline, any model via `ollama pull` |
+| OpenAI | `openai` | ~$0.02/1M tokens | `text-embedding-3-small` or `large`; Batch API option |
+
 ## Architecture
 
 smart-search follows the **Plugin/Adapter Pattern** — adding a new data source or embedding model requires only a new file, no core changes.
 
 ```
-Source Adapter  →  SyncEngine  →  Embedding Adapter  →  Weaviate
-    (CSV/JSON/REST)     (hash diff, incremental)    (Ollama)
+Source Adapter  →  SyncEngine  →  Embedding Adapter  →  Vector Store
+ CSV/JSON/MySQL/     hash diff,     Ollama / OpenAI     Qdrant / Weaviate
+   REST API          incremental
 ```
 
-See [docs/architecture overview in phases/01](docs/phases/01-container-foundation.md) for the block diagram.
+See [docs/architecture.md](docs/architecture.md) for the full system diagram.
 
 ## Running Tests
 

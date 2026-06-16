@@ -69,7 +69,7 @@ class BaseEmbeddingAdapter:
     def model_name(self) -> str: ...
 ```
 
-Current implementations: `OllamaEmbeddingAdapter` (default), `WeaviateBuiltinAdapter`.
+Current implementations: `OllamaEmbeddingAdapter` (default), `OpenAIEmbeddingAdapter`, `WeaviateBuiltinAdapter`.
 
 ### BaseVectorStore (`vector_stores/base.py`)
 
@@ -98,7 +98,7 @@ SyncEngine: compute hash per record (MD5 of hash_fields)
        └── hash changed or new? →
               │
               ▼
-       EmbeddingAdapter.embed(texts)   ← batched, 1000 records/batch
+       EmbeddingAdapter.embed(texts)   ← batched, 10000 records/batch
               │                           dedup: same text → embed once
               ▼
        VectorStore.upsert(records, vectors)
@@ -110,7 +110,11 @@ SyncEngine: compute hash per record (MD5 of hash_fields)
 
 **Model change detection**: on startup, `model_version.py` reads `model_version.json` from the data directory. If the model name changed, it automatically triggers a full re-index before accepting any queries.
 
-**Quantization**: for large collections (>100K records), configure `weaviate.quantization: pq` or `sq` in `config.yaml` to reduce RAM usage at a small quality cost. Must be set before the first index creation — cannot be added to an existing collection.
+**Quantization** (Weaviate): for large collections (>100K records), configure `vector_store.quantization: pq` or `sq` in `config.yaml` to reduce RAM usage at a small quality cost.
+
+**on_disk + quantization** (Qdrant): configure `vector_store.qdrant_opts.on_disk: true` to store raw vectors via memmap (saves ~6 GB RAM per 1M × 1536-dim vectors). Pair with `quantization.type: sq` and `search.rescore: true` to recover recall quality.
+
+Both must be set before the first index creation — cannot be changed on an existing collection.
 
 ---
 
