@@ -40,8 +40,9 @@ slowapi>=0.1.9,<1.0.0
 spacy>=3.7,<4.0
 
 # Qdrant vector database client (Phase 15 — QdrantVectorStore)
-# fastembed intentionally NOT added — Qdrant server handles BM25 inference natively (>= v1.15.2)
+# fastembed required: qmodels.Document BM25 sparse vectors are computed client-side by fastembed
 qdrant-client>=1.18.0,<2.0.0
+fastembed>=0.3.0,<1.0.0
 
 # Fuzzy + OMW synonym expansion (Phase 23 — advanced FTS)
 python-Levenshtein>=0.27.0,<1.0.0
