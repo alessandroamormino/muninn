@@ -507,7 +507,7 @@ vector_store:
 
 ### Weaviate-specific options
 
-For Weaviate (the default vector store in non-Qdrant setups), quantization is configured at the top level of `vector_store`:
+For Weaviate, quantization and HNSW tuning are configured at the top level of `vector_store`:
 
 ```yaml
 vector_store:
@@ -524,16 +524,87 @@ vector_store:
     max_connections: 32  # graph connectivity (default: 64) — IMMUTABLE after collection creation
 ```
 
-**Weaviate quantization options:**
-
-| Value | RAM reduction | Quality loss | When to use |
-|---|---|---|---|
-| `none` (default) | — | — | < 50K records |
-| `sq` | ~4× | ~1–2% | 10K–100K records |
-| `pq` | ~32× | ~2–5% | > 100K records |
-| `bq` | ~128× | ~10–15% | RAM is the hard constraint |
-
 > A warning appears in `GET /sync/status` when `total_records > 50,000` and `quantization: none`.
+
+---
+
+### Quantization — full comparison
+
+Quantization compresses vectors to reduce RAM. The available types and where they are configured differ between the two vector stores.
+
+> **Key rule**: `vector_store.quantization` (top-level) is **Weaviate only** and is ignored by Qdrant.  
+> Qdrant quantization goes under `vector_store.qdrant_opts.quantization.type`.
+
+| Type | Weaviate config | Qdrant config | RAM reduction | Quality loss | When to use |
+|---|---|---|---|---|---|
+| None | `quantization: none` | `qdrant_opts.quantization.type: none` | — | — | < 50K records, or quality is critical |
+| SQ (Scalar, int8) | `quantization: sq` | `qdrant_opts.quantization.type: sq` | ~4× | ~1–2% | 50K–500K records — best balance |
+| PQ (Product) | `quantization: pq` | **not supported** | ~32× | ~2–5% | > 100K records, Weaviate only |
+| BQ (Binary) | `quantization: bq` | `qdrant_opts.quantization.type: bq` | ~32–128× | ~10–15% | RAM is the hard constraint |
+
+> Quantization cannot be changed on an existing collection. Set it before the first full sync.  
+> When using Qdrant + quantization, always enable `search.rescore: true` to recover recall quality.
+
+---
+
+---
+
+## Vector store selection
+
+> **The vector store is a project-level setting, not per-entity.**  
+> All collections within a project share the same vector database. You cannot use Qdrant for one collection and Weaviate for another.
+
+### Where to configure it
+
+In your `.env` file, set three variables together:
+
+```bash
+# Qdrant (recommended default)
+VECTOR_STORE_ENGINE=qdrant
+COMPOSE_PROFILES=qdrant
+VECTOR_STORE_URL=http://vector-db-qdrant:6333
+
+# — or — Weaviate (legacy, original POC default)
+# VECTOR_STORE_ENGINE=weaviate
+# COMPOSE_PROFILES=weaviate
+# VECTOR_STORE_URL=http://vector-db:8080
+```
+
+`COMPOSE_PROFILES` is read automatically by Docker Compose from `.env` — you do not need to pass `--profile` on the command line when it is set there.
+
+### Starting the stack
+
+```bash
+# With Qdrant (default — COMPOSE_PROFILES=qdrant already in .env)
+docker compose up
+
+# Explicitly passing the profile (overrides .env)
+docker compose --profile qdrant up
+docker compose --profile weaviate up
+
+# Rebuild images and start
+docker compose --profile qdrant up --build
+```
+
+After changing the vector store engine you must:
+1. Update the three `.env` variables
+2. Run a full re-index (`POST /sync/full`) — data does not transfer between vector stores automatically
+
+### Qdrant vs Weaviate — quick comparison
+
+| Feature | Qdrant | Weaviate |
+|---|---|---|
+| **Default (recommended)** | ✅ since Phase 15 | ✅ original POC default |
+| **Language** | Rust | Go |
+| **RAM optimization** | `on_disk` memmap + SQ/BQ | SQ/PQ/BQ quantization |
+| **Product Quantization (PQ)** | ❌ not supported | ✅ |
+| **Qdrant dashboard** | ✅ built-in at `:6333/dashboard` | ❌ |
+| **gRPC support** | ✅ (preferred) | ✅ |
+| **Search modes** | hybrid, vector, bm25, fts | hybrid, vector, bm25 |
+| **Docker port** | 6333 (REST), 6334 (gRPC) | 8080 (REST), 50051 (gRPC) |
+| **Best for** | Large datasets, RAM-constrained setups | Feature-rich schema, PQ at scale |
+
+> Qdrant is the current recommended default. Weaviate is still fully supported.
 
 ---
 
