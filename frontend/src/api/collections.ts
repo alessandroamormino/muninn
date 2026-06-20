@@ -6,6 +6,8 @@ export interface CollectionItem {
   name: string
   source_type: string
   is_global?: boolean
+  // Phase 26 — per-entity load state; optional for backward compat with cached responses.
+  status?: 'active' | 'unloaded'
 }
 
 export function useCollections() {

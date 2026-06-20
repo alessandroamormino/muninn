@@ -53,6 +53,11 @@ export default function SearchPage() {
       const match = e.message.match(/HTTP 422[^"]*?"detail":\s*"([^"]+)"/)
       return match ? match[1] : e.message
     }
+    // Phase 26 — entity unloaded: surface the backend detail (it tells the user to reload it).
+    if (/HTTP 409/i.test(e.message)) {
+      const match = e.message.match(/HTTP 409[^"]*?"detail":\s*"([^"]+)"/)
+      return match ? match[1] : 'This entity is unloaded — reactivate it from Settings → Entities to search it.'
+    }
     if (/HTTP 404/i.test(e.message)) return 'No config found for this collection.'
     return 'Could not reach the search service. Check that the orchestrator container is running.'
   })()

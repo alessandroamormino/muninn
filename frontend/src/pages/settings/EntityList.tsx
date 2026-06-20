@@ -1,7 +1,9 @@
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { CollectionItem } from '@/api/collections'
 import { useSyncStatus } from '@/api/syncStatus'
+import { useUnloadEntity, useLoadEntity, useUnloadProgress } from '@/api/entities'
 
 const SOURCE_BADGE: Record<string, { label: string; className: string }> = {
   csv:      { label: 'CSV',      className: 'bg-blue-100 text-blue-700' },
@@ -64,6 +66,49 @@ function SyncDot({ collection }: { collection: string }) {
   return null
 }
 
+// Phase 26 — per-entity load/unload toggle. Hooks are called at the top of THIS
+// component's render (one instance per row), never inside a .map() callback or an
+// event handler (React Rules of Hooks, D-15). The onCheckedChange handler only calls
+// the stable `mutate` callbacks returned by the hooks.
+function EntityRowToggle({ name, status }: { name: string; status?: 'active' | 'unloaded' }) {
+  const unload = useUnloadEntity()
+  const load = useLoadEntity()
+  const { data: progress } = useUnloadProgress()
+
+  const isForThis = progress?.entity === name
+  const inFlight = isForThis && ['snapshotting', 'deleting', 'restoring'].includes(progress?.phase ?? '')
+  const failed = isForThis && progress?.phase === 'failed'
+  const busy = inFlight || unload.isPending || load.isPending
+  const checked = (status ?? 'active') === 'active'
+
+  return (
+    <div className="flex items-center gap-1.5 shrink-0">
+      {status === 'unloaded' && !inFlight && (
+        <span className="text-[9px] font-semibold px-1 py-0.5 rounded bg-amber-100 text-amber-700 leading-none">
+          unloaded
+        </span>
+      )}
+      {inFlight && (
+        <span className="text-[10px] text-muted-foreground">{progress?.phase}…</span>
+      )}
+      {failed && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-[10px] text-red-500 cursor-help">failed</span>
+          </TooltipTrigger>
+          <TooltipContent side="left">{progress?.error ?? 'Operation failed'}</TooltipContent>
+        </Tooltip>
+      )}
+      <Switch
+        checked={checked}
+        disabled={busy}
+        onCheckedChange={(next) => (next ? load.mutate(name) : unload.mutate(name))}
+        aria-label={checked ? `Unload ${name}` : `Load ${name}`}
+      />
+    </div>
+  )
+}
+
 interface Props {
   collections: CollectionItem[]
   selected: string | null
@@ -84,10 +129,10 @@ export default function EntityList({ collections, selected, onSelect, onCreateCs
       ) : (
         <ul className="flex-1 space-y-1 overflow-y-auto">
           {collections.map((c) => (
-            <li key={c.name}>
+            <li key={c.name} className="flex items-center gap-1">
               <button
                 onClick={() => onSelect(c.name)}
-                className={`w-full text-left px-3 py-2.5 rounded-md text-sm flex items-center justify-between gap-2 overflow-visible ${
+                className={`flex-1 min-w-0 text-left px-3 py-2.5 rounded-md text-sm flex items-center justify-between gap-2 overflow-visible ${
                   selected === c.name ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
                 }`}
               >
@@ -102,6 +147,7 @@ export default function EntityList({ collections, selected, onSelect, onCreateCs
                 </span>
                 <SourceBadge type={c.source_type} />
               </button>
+              <EntityRowToggle name={c.name} status={c.status} />
             </li>
           ))}
         </ul>
