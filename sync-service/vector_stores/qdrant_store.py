@@ -161,6 +161,11 @@ class QdrantVectorStore(BaseVectorStore):
     def __init__(self, url: str) -> None:
         self._url = url
         self._client: Any = None  # QdrantClient | None
+        # Dedicated REST client for snapshot lifecycle ops (create/recover/list/delete).
+        # These BLOCK until a potentially multi-GB archive is written/read, which blows
+        # past the gRPC per-call deadline (DEADLINE_EXCEEDED on large collections). A REST
+        # client with a long timeout handles them without touching the hot-path gRPC client.
+        self._snapshot_client: Any = None  # QdrantClient | None (REST, long timeout)
         # Tracks active HNSW staging per collection (begin_bulk_load / end_bulk_load).
         self._staging_active: dict[str, bool] = {}
         # Thread-local storage for per-thread QdrantClient instances used in parallel upserts.
@@ -176,14 +181,32 @@ class QdrantVectorStore(BaseVectorStore):
         self._client = QdrantClient(url=self._url, prefer_grpc=True)
         logger.info("QdrantVectorStore: connected to %s (gRPC preferred)", self._url)
 
+    # Long timeout (seconds) for blocking snapshot create/recover of large collections.
+    _SNAPSHOT_TIMEOUT_S = 1800
+
+    def _snapshot_ops_client(self) -> Any:
+        """Lazily create a REST QdrantClient with a long timeout for snapshot lifecycle.
+
+        Separate from the hot-path gRPC client so a multi-GB snapshot/restore can block
+        for minutes without hitting the gRPC deadline, and without inflating the deadline
+        on every search/upsert call.
+        """
+        if self._snapshot_client is None:
+            self._snapshot_client = QdrantClient(
+                url=self._url, prefer_grpc=False, timeout=self._SNAPSHOT_TIMEOUT_S,
+            )
+        return self._snapshot_client
+
     def close(self) -> None:
         """Close connection. Safe to call when not open."""
-        if self._client is not None:
-            try:
-                self._client.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self._client = None
+        for attr in ("_client", "_snapshot_client"):
+            client = getattr(self, attr)
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                setattr(self, attr, None)
 
     def is_live(self) -> bool:
         """Health check — True if Qdrant responds to get_collections."""
@@ -342,7 +365,9 @@ class QdrantVectorStore(BaseVectorStore):
         SnapshotDescription returned by create_snapshot (Pitfall 1 / Assumption A1
         in 26-RESEARCH.md): the exact naming pattern is not a stable API contract.
         """
-        desc = self._client.create_snapshot(collection_name=collection_name, wait=True)
+        desc = self._snapshot_ops_client().create_snapshot(
+            collection_name=collection_name, wait=True,
+        )
         if desc is None:
             raise RuntimeError(f"create_snapshot returned None for {collection_name!r}")
         logger.info(
@@ -362,7 +387,7 @@ class QdrantVectorStore(BaseVectorStore):
         return value must be checked explicitly (Pitfall 4).
         """
         location = f"file:///qdrant/snapshots/{collection_name}/{snapshot_name}"
-        ok = self._client.recover_snapshot(
+        ok = self._snapshot_ops_client().recover_snapshot(
             collection_name=collection_name,
             location=location,
             wait=True,
@@ -378,13 +403,13 @@ class QdrantVectorStore(BaseVectorStore):
 
     def list_collection_snapshots(self, collection_name: str) -> list[str]:
         """Return snapshot file names for a collection, newest first."""
-        snaps = self._client.list_snapshots(collection_name=collection_name)
+        snaps = self._snapshot_ops_client().list_snapshots(collection_name=collection_name)
         snaps_sorted = sorted(snaps, key=lambda s: s.creation_time or "", reverse=True)
         return [s.name for s in snaps_sorted]
 
     def delete_collection_snapshot(self, collection_name: str, snapshot_name: str) -> None:
         """Delete a specific snapshot file (cleanup of stale duplicates)."""
-        self._client.delete_snapshot(
+        self._snapshot_ops_client().delete_snapshot(
             collection_name=collection_name, snapshot_name=snapshot_name, wait=True,
         )
 

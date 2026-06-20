@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -71,6 +73,7 @@ function SyncDot({ collection }: { collection: string }) {
 // event handler (React Rules of Hooks, D-15). The onCheckedChange handler only calls
 // the stable `mutate` callbacks returned by the hooks.
 function EntityRowToggle({ name, status }: { name: string; status?: 'active' | 'unloaded' }) {
+  const qc = useQueryClient()
   const unload = useUnloadEntity()
   const load = useLoadEntity()
   const { data: progress } = useUnloadProgress()
@@ -78,6 +81,18 @@ function EntityRowToggle({ name, status }: { name: string; status?: 'active' | '
   const isForThis = progress?.entity === name
   const inFlight = isForThis && ['snapshotting', 'deleting', 'restoring'].includes(progress?.phase ?? '')
   const failed = isForThis && progress?.phase === 'failed'
+
+  // The unload/load runs in the background: the POST returns immediately while the
+  // status flip happens later. Refetch the collections list when this row's operation
+  // reaches a terminal phase so the status badge/switch update without a manual reload.
+  const prevPhase = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const phase = isForThis ? progress?.phase : undefined
+    if (phase !== prevPhase.current && (phase === 'done' || phase === 'failed')) {
+      qc.invalidateQueries({ queryKey: ['collections'] })
+    }
+    prevPhase.current = phase
+  }, [isForThis, progress?.phase, qc])
   const busy = inFlight || unload.isPending || load.isPending
   const checked = (status ?? 'active') === 'active'
 
