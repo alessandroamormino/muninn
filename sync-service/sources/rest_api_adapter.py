@@ -4,6 +4,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import random
+import time
 from datetime import datetime
 
 import requests
@@ -15,6 +17,16 @@ from config.settings import SourceConfig, SyncConfig, VectorStoreConfig
 logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT = 30  # seconds
+
+# Rate-limit retry-with-backoff (Phase 16 — needed for rate-limited APIs).
+# Different providers signal "back off" with different status codes:
+# Discogs uses 429, MusicBrainz uses 503 for its own rate limiter (genuine outages
+# also return 503, but backing off and retrying is the right move either way).
+_RETRYABLE_STATUS_CODES = {429, 503}
+_MAX_RETRIES = 5
+_INITIAL_DELAY = 1.0   # seconds before first retry
+_MAX_DELAY = 120.0     # cap so a stuck rate-limit window doesn't stall a sync indefinitely
+_JITTER_FACTOR = 0.5
 
 
 class RestAPIAdapter(BaseSourceAdapter):
@@ -34,6 +46,8 @@ class RestAPIAdapter(BaseSourceAdapter):
         self._json_key = source_cfg.json_key
         self._id_field = source_cfg.id_field
         self._hash_fields = sync_cfg.hash_fields
+        self._static_headers = source_cfg.headers
+        self._flatten = source_cfg.flatten
 
     # ---------- public BaseSourceAdapter API ----------
 
@@ -76,7 +90,8 @@ class RestAPIAdapter(BaseSourceAdapter):
             is_first_request = False
 
         self._validate_id_field(all_records)
-        return self._filter_valid(all_records)
+        valid = self._filter_valid(all_records)
+        return self._apply_flatten(valid)
 
     def fetch_new_records(self, since: datetime) -> list[dict]:
         """REST APIs generally lack server-side time filters — return all records.
@@ -93,7 +108,9 @@ class RestAPIAdapter(BaseSourceAdapter):
     # ---------- private helpers ----------
 
     def _build_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = {
+            name: _resolve_env_vars(value) for name, value in self._static_headers.items()
+        }
         auth = self._auth
         if auth.type == "bearer":
             token = _resolve_env_vars(auth.token or "")
@@ -124,28 +141,57 @@ class RestAPIAdapter(BaseSourceAdapter):
             params[pag.limit_param] = pag.page_size
 
     def _do_request(self, url: str, headers: dict, params: dict) -> dict | list:
-        try:
-            if self._method == "POST":
-                response = requests.post(
-                    url, headers=headers, params=params, timeout=_REQUEST_TIMEOUT
-                )
-            else:
-                response = requests.get(
-                    url, headers=headers, params=params, timeout=_REQUEST_TIMEOUT
-                )
-            response.raise_for_status()
+        for attempt in range(_MAX_RETRIES + 1):
             try:
-                return response.json()
-            except (ValueError, requests.exceptions.JSONDecodeError) as exc:
+                if self._method == "POST":
+                    response = requests.post(
+                        url, headers=headers, params=params, timeout=_REQUEST_TIMEOUT
+                    )
+                else:
+                    response = requests.get(
+                        url, headers=headers, params=params, timeout=_REQUEST_TIMEOUT
+                    )
+                if response.status_code in _RETRYABLE_STATUS_CODES and attempt < _MAX_RETRIES:
+                    self._sleep_before_retry(response, attempt, url)
+                    continue
+                response.raise_for_status()
+                try:
+                    return response.json()
+                except (ValueError, requests.exceptions.JSONDecodeError) as exc:
+                    raise AdapterError(
+                        f"Response from {url} is not valid JSON: {exc}"
+                    ) from exc
+            except requests.exceptions.Timeout as exc:
                 raise AdapterError(
-                    f"Response from {url} is not valid JSON: {exc}"
+                    f"Request to {url} timed out after {_REQUEST_TIMEOUT} seconds"
                 ) from exc
-        except requests.exceptions.Timeout as exc:
-            raise AdapterError(
-                f"Request to {url} timed out after {_REQUEST_TIMEOUT} seconds"
-            ) from exc
-        except requests.exceptions.RequestException as exc:
-            raise AdapterError(f"Failed to fetch records from {url}: {exc}") from exc
+            except requests.exceptions.RequestException as exc:
+                raise AdapterError(f"Failed to fetch records from {url}: {exc}") from exc
+        raise AdapterError(
+            f"Request to {url} rate-limited (HTTP {response.status_code}) "
+            f"after {_MAX_RETRIES} retries"
+        )
+
+    def _sleep_before_retry(self, response: requests.Response, attempt: int, url: str) -> None:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                delay = float(retry_after)
+            except ValueError:
+                delay = _INITIAL_DELAY * (2.0 ** attempt)
+        else:
+            delay = min(_INITIAL_DELAY * (2.0 ** attempt), _MAX_DELAY)
+        jitter = delay * _JITTER_FACTOR * (random.random() * 2 - 1)
+        sleep_secs = max(0.0, delay + jitter)
+        logger.warning(
+            "HTTP %d from %s — retry %d/%d, sleeping %.1fs",
+            response.status_code,
+            url,
+            attempt + 1,
+            _MAX_RETRIES,
+            sleep_secs,
+        )
+        time.sleep(sleep_secs)
 
     def _extract_records(self, data) -> list[dict]:
         if isinstance(data, list):
@@ -180,7 +226,9 @@ class RestAPIAdapter(BaseSourceAdapter):
             return next_url, False
         if pag.type == "page":
             total_pages = (
-                data.get(pag.total_pages_key, 1) if isinstance(data, dict) else 1
+                self._get_nested_value(data, pag.total_pages_key, default=1)
+                if isinstance(data, dict)
+                else 1
             )
             page_state["page"] += 1
             if page_state["page"] > total_pages or not page_records:
@@ -192,6 +240,47 @@ class RestAPIAdapter(BaseSourceAdapter):
             page_state["offset"] += pag.page_size
             return current_url, False
         return current_url, True
+
+    def _apply_flatten(self, records: list[dict]) -> list[dict]:
+        """Flatten configured nested fields into clean, comma-joined strings.
+
+        For each `field: sub_key` rule, replace record[field] (a list of dicts or a
+        single dict) with the extracted sub_key value(s). List → "v1, v2"; single
+        dict → "v". Non-matching shapes (scalars, missing field) are left untouched
+        so a misconfigured rule can never corrupt a record.
+        """
+        if not self._flatten:
+            return records
+        for record in records:
+            for field, sub_key in self._flatten.items():
+                if field not in record:
+                    continue
+                value = record[field]
+                if isinstance(value, list):
+                    parts = [
+                        str(item[sub_key])
+                        for item in value
+                        if isinstance(item, dict) and item.get(sub_key) is not None
+                    ]
+                    record[field] = ", ".join(parts)
+                elif isinstance(value, dict):
+                    extracted = value.get(sub_key)
+                    record[field] = "" if extracted is None else str(extracted)
+        return records
+
+    @staticmethod
+    def _get_nested_value(data: dict, dotted_key: str, default=None):
+        """Resolve a dot-notation key (e.g. "pagination.pages") against a nested dict.
+
+        Falls back to `default` if any path segment is missing or non-dict,
+        e.g. for Discogs-style responses where pagination metadata is nested.
+        """
+        current = data
+        for part in dotted_key.split("."):
+            if not isinstance(current, dict) or part not in current:
+                return default
+            current = current[part]
+        return current
 
     def _validate_id_field(self, records: list[dict]) -> None:
         if records and self._id_field not in records[0]:

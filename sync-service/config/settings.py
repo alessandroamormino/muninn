@@ -47,6 +47,7 @@ class PaginationConfig(BaseModel):
     next_key: str | None = None
     # page pagination
     page_param: str = "page"
+    # dot-notation supported for nested responses, e.g. "pagination.pages" (Discogs-style)
     total_pages_key: str = "total_pages"
     start_page: int = 1
     # offset pagination
@@ -121,6 +122,12 @@ class SourceConfig(BaseModel):
     pagination: PaginationConfig = Field(default_factory=PaginationConfig)
     params: dict[str, str | int | float | bool] = Field(default_factory=dict)
     method: Literal["GET", "POST"] = "GET"
+    # Phase 16 addition — static headers (e.g. User-Agent) for rest_api; values support ${VAR}
+    headers: dict[str, str] = Field(default_factory=dict)
+    # Phase 16 addition — declarative flatten for nested rest_api fields.
+    # Maps a field holding a list-of-dicts (or a single dict) to the sub-key to extract.
+    # e.g. {"tags": "name"} turns [{"name":"rock"},{"name":"metal"}] into "rock, metal".
+    flatten: dict[str, str] = Field(default_factory=dict)
     # Phase 14 addition — optional; None for all non-MySQL adapters
     mysql: MySQLConfig | None = None
 
