@@ -328,6 +328,67 @@ class QdrantVectorStore(BaseVectorStore):
             logger.info("QdrantVectorStore: collection %r does not exist; nothing to drop.", collection_name)
 
     # ------------------------------------------------------------------
+    # Snapshot / restore (Phase 26 — entity load/unload management)
+    # ------------------------------------------------------------------
+
+    def supports_snapshots(self) -> bool:
+        """Qdrant supports native snapshot/restore (D-06)."""
+        return True
+
+    def snapshot_collection(self, collection_name: str) -> str:
+        """Create a Qdrant snapshot for collection_name. Returns the snapshot file name.
+
+        NEVER constructs the snapshot name itself — always reads it from the
+        SnapshotDescription returned by create_snapshot (Pitfall 1 / Assumption A1
+        in 26-RESEARCH.md): the exact naming pattern is not a stable API contract.
+        """
+        desc = self._client.create_snapshot(collection_name=collection_name, wait=True)
+        if desc is None:
+            raise RuntimeError(f"create_snapshot returned None for {collection_name!r}")
+        logger.info(
+            "QdrantVectorStore: snapshot created %r for collection %r (size=%s bytes)",
+            desc.name, collection_name, desc.size,
+        )
+        return desc.name
+
+    def restore_collection(self, collection_name: str, snapshot_name: str) -> None:
+        """Restore collection_name from a previously created LOCAL snapshot.
+
+        IMPORTANT: does NOT call create_index() first — recover_snapshot creates the
+        collection if absent, or overwrites it if present (Qdrant native behavior).
+        The location uses the file:// URI scheme interpreted INSIDE the Qdrant
+        container filesystem (NOT the orchestrator's — Pitfall 1 in 26-RESEARCH.md).
+        recover_snapshot returns False/None (not an exception) on failure — the
+        return value must be checked explicitly (Pitfall 4).
+        """
+        location = f"file:///qdrant/snapshots/{collection_name}/{snapshot_name}"
+        ok = self._client.recover_snapshot(
+            collection_name=collection_name,
+            location=location,
+            wait=True,
+        )
+        if not ok:
+            raise RuntimeError(
+                f"recover_snapshot failed for {collection_name!r} from {location!r}"
+            )
+        logger.info(
+            "QdrantVectorStore: collection %r restored from snapshot %r",
+            collection_name, snapshot_name,
+        )
+
+    def list_collection_snapshots(self, collection_name: str) -> list[str]:
+        """Return snapshot file names for a collection, newest first."""
+        snaps = self._client.list_snapshots(collection_name=collection_name)
+        snaps_sorted = sorted(snaps, key=lambda s: s.creation_time or "", reverse=True)
+        return [s.name for s in snaps_sorted]
+
+    def delete_collection_snapshot(self, collection_name: str, snapshot_name: str) -> None:
+        """Delete a specific snapshot file (cleanup of stale duplicates)."""
+        self._client.delete_snapshot(
+            collection_name=collection_name, snapshot_name=snapshot_name, wait=True,
+        )
+
+    # ------------------------------------------------------------------
     # Data operations
     # ------------------------------------------------------------------
 

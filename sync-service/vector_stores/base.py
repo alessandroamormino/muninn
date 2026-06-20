@@ -126,6 +126,11 @@ class BaseVectorStore(ABC):
     Graph support:
         get_vectors_for_graph(...) — return vectors for UMAP/HDBSCAN (None if FTS-only)
 
+    Snapshot / restore (entity load/unload, Phase 26):
+        supports_snapshots()           — True if engine supports snapshot/restore (default: False)
+        snapshot_collection(name)      — create snapshot, return its name (default: raise)
+        restore_collection(name, snap) — restore from a snapshot (default: raise)
+
     Health:
         is_live()                  — True if backend is reachable
     """
@@ -194,6 +199,36 @@ class BaseVectorStore(ABC):
         Implementations restore production settings set in begin_bulk_load
         (e.g. Qdrant: rebuild HNSW with m=16). No-op by default.
         """
+
+    # ------------------------------------------------------------------
+    # Snapshot / restore (Phase 26 — entity load/unload management)
+    # ------------------------------------------------------------------
+
+    def supports_snapshots(self) -> bool:
+        """Return True if this engine supports snapshot/restore (unload/load).
+
+        Default: False. Only QdrantVectorStore overrides this to True (D-06).
+        """
+        return False
+
+    def snapshot_collection(self, collection_name: str) -> str:
+        """Create a snapshot of collection_name and return its name.
+
+        Default: raises NotImplementedError. Only QdrantVectorStore implements this.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} non supporta snapshot/unload. "
+            "Usa l'engine Qdrant per questa funzionalità."
+        )
+
+    def restore_collection(self, collection_name: str, snapshot_name: str) -> None:
+        """Restore collection_name from a previously created snapshot.
+
+        Default: raises NotImplementedError. Only QdrantVectorStore implements this.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} non supporta snapshot/restore."
+        )
 
     @abstractmethod
     def search(
