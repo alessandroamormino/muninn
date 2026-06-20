@@ -70,7 +70,10 @@ def _run_unload_bg(app_state, collection: str) -> None:
         app_state.unload_progress = {"entity": collection, "phase": "failed", "error": str(exc)}
         # Status NOT changed — remains whatever it was before this attempt.
     finally:
-        app_state.sync_lock.release()
+        # Release only if held: the endpoint acquires the lock before scheduling
+        # this task, but direct/unit invocation runs without it held (Pitfall 9).
+        if app_state.sync_lock.locked():
+            app_state.sync_lock.release()
 
 
 def _run_load_bg(app_state, collection: str) -> None:
@@ -101,7 +104,10 @@ def _run_load_bg(app_state, collection: str) -> None:
         app_state.unload_progress = {"entity": collection, "phase": "failed", "error": str(exc)}
         # Status stays 'unloaded' — still reactivable (Pitfall 4).
     finally:
-        app_state.sync_lock.release()
+        # Release only if held: the endpoint acquires the lock before scheduling
+        # this task, but direct/unit invocation runs without it held (Pitfall 9).
+        if app_state.sync_lock.locked():
+            app_state.sync_lock.release()
 
 
 @router.post("/collections/{name}/unload")

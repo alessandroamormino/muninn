@@ -64,15 +64,20 @@ def _validate_collection_name(name: str) -> None:
 
 
 @router.get("/collections")
-async def list_collections(_: UserRecord = Depends(get_current_user)) -> dict:
+async def list_collections(request: Request, _: UserRecord = Depends(get_current_user)) -> dict:
     """List all configured collections by scanning configuration/ subdirectories.
 
-    Returns {"collections": [{name, source_type, is_global}, ...]} sorted alphabetically.
+    Returns {"collections": [{name, source_type, is_global, status}, ...]} sorted alphabetically.
     Each directory under _CONFIG_ROOT that contains a config.yaml is a valid collection.
     The root configuration/config.yaml (global fallback) is appended last with is_global=True,
     only when no per-entity directory already claims its collection name.
     source_type is read from the config; falls back to "unknown" on parse error.
+    status is 'active' or 'unloaded' per entity_state_store (D-12) — defaults to 'active'
+    when no entity_state_store is wired on app.state (backward compat). Unloaded entities
+    remain LISTED here (so the frontend can re-activate them via POST .../load).
     """
+    state_store = getattr(request.app.state, "entity_state_store", None)
+
     if not _CONFIG_ROOT.exists():
         return {"collections": []}
     items = []
@@ -85,7 +90,8 @@ async def list_collections(_: UserRecord = Depends(get_current_user)) -> dict:
             source_type = cfg.source.type
         except Exception:  # noqa: BLE001
             pass
-        items.append({"name": d.name, "source_type": source_type, "is_global": False})
+        status = state_store.get_status(d.name) if state_store else "active"
+        items.append({"name": d.name, "source_type": source_type, "is_global": False, "status": status})
 
     global_yaml = _CONFIG_ROOT / "config.yaml"
     if global_yaml.exists():
@@ -93,7 +99,8 @@ async def list_collections(_: UserRecord = Depends(get_current_user)) -> dict:
             gcfg = load_config(global_yaml)
             gname = gcfg.vector_store.collection
             if not any(it["name"] == gname for it in items):
-                items.append({"name": gname, "source_type": gcfg.source.type, "is_global": True})
+                gstatus = state_store.get_status(gname) if state_store else "active"
+                items.append({"name": gname, "source_type": gcfg.source.type, "is_global": True, "status": gstatus})
         except Exception:  # noqa: BLE001
             pass
 
