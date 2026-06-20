@@ -37,6 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from auth.dependencies import get_current_user
 from auth.user_store import UserRecord
+from api.gating import _assert_entity_active
 from config.settings import _CONFIG_PATH, load_config, settings
 from embeddings import build_embedding_adapter
 from vector_stores.synonyms import _load_synonyms, _expand_query, _get_omw_synonyms, _ensure_omw_downloaded
@@ -212,6 +213,9 @@ async def search(
 
     # --- Effective collection name (used for cache keying and history logging) --
     effective_collection = collection if collection is not None else cfg.vector_store.collection
+
+    # --- Gating: 409 if this entity is unloaded (D-10) -------------------------
+    _assert_entity_active(getattr(request.app.state, "entity_state_store", None), effective_collection)
 
     # --- Cache + history references (resolved once, used on both hit and miss paths) ---
     cache_store = getattr(request.app.state, "cache_store", None)

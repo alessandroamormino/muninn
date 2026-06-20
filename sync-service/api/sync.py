@@ -14,6 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from auth.dependencies import get_current_user, require_admin
 from auth.user_store import UserRecord
+from api.gating import _assert_entity_active
 from config.settings import load_config, settings
 from sync.engine import SyncEngine
 
@@ -147,6 +148,9 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
 @router.post("/sync")
 async def trigger_sync(request: Request, background_tasks: BackgroundTasks, _: UserRecord = Depends(require_admin)) -> dict:
     """Avvia un sync incrementale in background."""
+    _assert_entity_active(
+        getattr(request.app.state, "entity_state_store", None), settings.vector_store.collection
+    )
     if not request.app.state.sync_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Sync already in progress")
     try:
@@ -161,6 +165,9 @@ async def trigger_sync(request: Request, background_tasks: BackgroundTasks, _: U
 @router.post("/sync/full")
 async def trigger_full_sync(request: Request, background_tasks: BackgroundTasks, _: UserRecord = Depends(require_admin)) -> dict:
     """Avvia un full re-index in background."""
+    _assert_entity_active(
+        getattr(request.app.state, "entity_state_store", None), settings.vector_store.collection
+    )
     if not request.app.state.sync_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Sync already in progress")
     try:

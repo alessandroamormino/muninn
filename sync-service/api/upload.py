@@ -16,6 +16,7 @@ from pydantic import BaseModel, field_validator
 from auth.dependencies import get_current_user, require_admin
 from auth.user_store import UserRecord
 
+from api.gating import _assert_entity_active
 from config.settings import _CONFIG_PATH, load_config, settings
 from sync.engine import SyncEngine
 from sync.state_store import StateStore
@@ -474,6 +475,7 @@ async def trigger_full_sync_by_collection(
     config_path = _resolve_config_path(collection)
     if config_path is None:
         raise HTTPException(status_code=404, detail=f"No config found for collection '{collection}'")
+    _assert_entity_active(getattr(request.app.state, "entity_state_store", None), collection)
     lock_acquired = False
     try:
         if not request.app.state.sync_lock.acquire(blocking=False):
@@ -506,6 +508,7 @@ async def trigger_incremental_sync_by_collection(
     config_path = _resolve_config_path(collection)
     if config_path is None:
         raise HTTPException(status_code=404, detail=f"No config found for collection '{collection}'")
+    _assert_entity_active(getattr(request.app.state, "entity_state_store", None), collection)
     lock_acquired = False
     try:
         if not request.app.state.sync_lock.acquire(blocking=False):
