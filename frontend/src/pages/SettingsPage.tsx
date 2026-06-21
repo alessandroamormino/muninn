@@ -121,13 +121,11 @@ export default function SettingsPage() {
                 label="RAM (total)"
                 value={formatBytes(data.totals.mem_used).split(' ')[0]}
                 unit={formatBytes(data.totals.mem_used).split(' ')[1]}
+                secondary={`/ ${formatBytes(data.totals.mem_limit)}`}
                 fraction={memFraction(data.totals.mem_used, data.totals.mem_limit)}
                 variant="lg"
               />
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              of {formatBytes(data.totals.mem_limit)} host RAM
-            </p>
           </section>
 
           <section>
