@@ -3,6 +3,7 @@ import { Separator } from '@/components/ui/separator'
 
 const NAV = [
   { to: '/search', label: 'Search' },
+  { to: '/entities', label: 'Entities' },
   { to: '/settings', label: 'Settings' },
   { to: '/logs', label: 'Logs' },
   { to: '/graph', label: 'Knowledge Graph' },
