@@ -16,7 +16,7 @@ type Mode =
   | { kind: 'view'; collection: string }
   | { kind: 'new'; sourceType: 'csv' | 'rest_api' | 'mysql' }
 
-export default function SettingsPage() {
+export default function EntitiesPage() {
   const { data } = useCollections()
   const [mode, setMode] = useState<Mode>({ kind: 'idle' })
 
