@@ -35,6 +35,7 @@ from api.auth import router as auth_router, _limiter as auth_limiter
 from api.admin import router as admin_router
 from api.history import router as history_router
 from api.config import router as config_router
+from api.metrics import router as metrics_router
 from auth.user_store import UserStore, RefreshTokenStore
 from scheduler import build_scheduler
 from sync.log_store import LogStore
@@ -228,6 +229,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(history_router)
 app.include_router(config_router)
+app.include_router(metrics_router)
 
 
 @app.get("/health")
