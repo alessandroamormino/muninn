@@ -100,8 +100,8 @@ export default function SettingsPage() {
 
       {!isError && isLoading && (
         <div className="grid grid-cols-2 gap-4">
-          <Skeleton className="h-[120px] rounded-md" />
-          <Skeleton className="h-[120px] rounded-md" />
+          <Skeleton className="h-[140px] rounded-md" />
+          <Skeleton className="h-[140px] rounded-md" />
         </div>
       )}
 
@@ -115,14 +115,14 @@ export default function SettingsPage() {
                 value={formatCpu(data.totals.cpu_pct).replace('%', '')}
                 unit="%"
                 fraction={cpuFraction(data.totals.cpu_pct)}
-                gauge="right"
+                variant="lg"
               />
               <StatCard
                 label="RAM (total)"
                 value={formatBytes(data.totals.mem_used).split(' ')[0]}
                 unit={formatBytes(data.totals.mem_used).split(' ')[1]}
                 fraction={memFraction(data.totals.mem_used, data.totals.mem_limit)}
-                gauge="right"
+                variant="lg"
               />
             </div>
             <p className="text-xs text-muted-foreground mt-1">

@@ -6,26 +6,35 @@
 //
 // Fill order is left-to-right by column, bottom-up within each column, so the lit
 // front rises like a filling tank. Colour stays monochrome (foreground dots on a
-// faint track) until the level enters warn/danger bands, where it picks up amber /
-// the destructive red as a Nothing-style accent under pressure.
+// faint /20 track that is visible even at ~0% fill) until the level enters
+// warn/danger bands, where it picks up amber / the destructive red as a
+// Nothing-style accent under pressure.
 //
-// SIZING: the cell grid divides the container in BOTH axes (grid-template-rows +
-// grid-template-columns), so the gauge fills whatever box `className` gives it and
-// never overflows. The caller MUST set a bounded height (and usually width) via
-// `className` — e.g. `h-7 w-full` below a value, or `h-12 w-40` beside it. Do NOT
-// use aspect-square cells: on a wide card that scales each cell to the column width
-// and blows the gauge far past the card.
+// SIZING: cells are a FIXED square `cell` px — the grid sizes itself to its content
+// (cols×cell), never stretching to the card width. This keeps every pixel the same
+// crisp size regardless of how wide the card is, and the gauge can never overflow
+// (it is always smaller than the card box that contains it).
 
 interface Props {
   /** 0..1; values outside the range are clamped. NaN/Infinity treated as 0. */
   fraction: number
   cols?: number
   rows?: number
-  /** Tailwind sizing for the gauge box — MUST include a bounded height. */
+  /** Square cell edge in px. */
+  cell?: number
+  /** Gap between cells in px. */
+  gap?: number
   className?: string
 }
 
-export function PixelGauge({ fraction, cols = 20, rows = 5, className }: Props) {
+export function PixelGauge({
+  fraction,
+  cols = 26,
+  rows = 5,
+  cell = 6,
+  gap = 2,
+  className,
+}: Props) {
   const frac = Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0))
   const total = cols * rows
   const lit = Math.round(frac * total)
@@ -44,7 +53,7 @@ export function PixelGauge({ fraction, cols = 20, rows = 5, className }: Props) 
         <span
           key={`${r}-${c}`}
           className={`rounded-[1px] transition-colors duration-300 ${
-            on ? litClass : 'bg-foreground/10'
+            on ? litClass : 'bg-foreground/20'
           }`}
         />,
       )
@@ -53,10 +62,11 @@ export function PixelGauge({ fraction, cols = 20, rows = 5, className }: Props) 
 
   return (
     <div
-      className={`grid gap-[2px] ${className ?? ''}`}
+      className={`grid ${className ?? ''}`}
       style={{
-        gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-        gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+        gridTemplateColumns: `repeat(${cols}, ${cell}px)`,
+        gridAutoRows: `${cell}px`,
+        gap: `${gap}px`,
       }}
       role="meter"
       aria-valuenow={Math.round(frac * 100)}
