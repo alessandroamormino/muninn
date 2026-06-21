@@ -115,13 +115,14 @@ export default function SettingsPage() {
                 value={formatCpu(data.totals.cpu_pct).replace('%', '')}
                 unit="%"
                 fraction={cpuFraction(data.totals.cpu_pct)}
+                gauge="right"
               />
               <StatCard
                 label="RAM (total)"
                 value={formatBytes(data.totals.mem_used).split(' ')[0]}
                 unit={formatBytes(data.totals.mem_used).split(' ')[1]}
                 fraction={memFraction(data.totals.mem_used, data.totals.mem_limit)}
-                className="relative"
+                gauge="right"
               />
             </div>
             <p className="text-xs text-muted-foreground mt-1">

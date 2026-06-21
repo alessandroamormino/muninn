@@ -8,12 +8,20 @@
 // front rises like a filling tank. Colour stays monochrome (foreground dots on a
 // faint track) until the level enters warn/danger bands, where it picks up amber /
 // the destructive red as a Nothing-style accent under pressure.
+//
+// SIZING: the cell grid divides the container in BOTH axes (grid-template-rows +
+// grid-template-columns), so the gauge fills whatever box `className` gives it and
+// never overflows. The caller MUST set a bounded height (and usually width) via
+// `className` — e.g. `h-7 w-full` below a value, or `h-12 w-40` beside it. Do NOT
+// use aspect-square cells: on a wide card that scales each cell to the column width
+// and blows the gauge far past the card.
 
 interface Props {
   /** 0..1; values outside the range are clamped. NaN/Infinity treated as 0. */
   fraction: number
   cols?: number
   rows?: number
+  /** Tailwind sizing for the gauge box — MUST include a bounded height. */
   className?: string
 }
 
@@ -35,7 +43,7 @@ export function PixelGauge({ fraction, cols = 20, rows = 5, className }: Props) 
       cells.push(
         <span
           key={`${r}-${c}`}
-          className={`aspect-square rounded-[1px] transition-colors duration-300 ${
+          className={`rounded-[1px] transition-colors duration-300 ${
             on ? litClass : 'bg-foreground/10'
           }`}
         />,
@@ -46,7 +54,10 @@ export function PixelGauge({ fraction, cols = 20, rows = 5, className }: Props) 
   return (
     <div
       className={`grid gap-[2px] ${className ?? ''}`}
-      style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+      style={{
+        gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+        gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+      }}
       role="meter"
       aria-valuenow={Math.round(frac * 100)}
       aria-valuemin={0}
