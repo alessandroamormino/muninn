@@ -62,6 +62,7 @@ services:
       - ./configuration:/app/configuration:rw
       - ./data:/app/data:rw
       - sync_data:/app/.sync
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s

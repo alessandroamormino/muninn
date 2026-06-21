@@ -47,3 +47,6 @@ fastembed>=0.3.0,<1.0.0
 # Fuzzy + OMW synonym expansion (Phase 23 — advanced FTS)
 python-Levenshtein>=0.27.0,<1.0.0
 wn>=1.1.0,<2.0.0
+
+# Docker Engine API client (Phase 27 — Resource Monitoring Dashboard)
+docker>=7.1.0,<8.0.0
