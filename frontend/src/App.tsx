@@ -12,9 +12,11 @@ import ProtectedRoute from './components/auth/ProtectedRoute'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Toaster } from './components/ui/sonner'
 
-// Phase 27 — lazy-load the new monitoring Settings page specifically to contain
-// the recharts bundle cost. This is the ONE deliberate, scoped exception to this
-// file's all-eager-import convention — no other route should be made lazy.
+// Phase 27 — the monitoring Settings page is code-split into its own chunk. This is
+// the ONE deliberate, scoped exception to this file's all-eager-import convention —
+// no other route should be made lazy. (Originally added to isolate the recharts
+// bundle; the sparkline was later replaced by a dependency-free PixelGauge, but the
+// lazy boundary is kept so monitoring stays off the main bundle's critical path.)
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 
 /**
