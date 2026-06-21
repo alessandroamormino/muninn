@@ -1,15 +1,21 @@
+import { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router'
 import { toast } from 'sonner'
 import { useNavigate } from 'react-router'
 import Shell from './components/layout/Shell'
 import SearchPage from './pages/SearchPage'
-import SettingsPage from './pages/SettingsPage'
+import EntitiesPage from './pages/EntitiesPage'
 import LogsPage from './pages/LogsPage'
 import GraphPage from './pages/GraphPage'
 import LoginPage from './pages/LoginPage'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Toaster } from './components/ui/sonner'
+
+// Phase 27 — lazy-load the new monitoring Settings page specifically to contain
+// the recharts bundle cost. This is the ONE deliberate, scoped exception to this
+// file's all-eager-import convention — no other route should be made lazy.
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 
 /**
  * Inner app — has access to AuthContext via useAuth().
@@ -45,7 +51,15 @@ function AppRoutes() {
                 <Routes>
                   <Route path="/" element={<Navigate to="/search" replace />} />
                   <Route path="/search" element={<SearchPage />} />
-                  <Route path="/settings" element={<SettingsPage />} />
+                  <Route path="/entities" element={<EntitiesPage />} />
+                  <Route
+                    path="/settings"
+                    element={
+                      <Suspense fallback={null}>
+                        <SettingsPage />
+                      </Suspense>
+                    }
+                  />
                   <Route path="/logs" element={<LogsPage />} />
                   <Route path="/graph" element={<GraphPage />} />
                 </Routes>
