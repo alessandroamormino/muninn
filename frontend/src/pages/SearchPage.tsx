@@ -65,7 +65,7 @@ export default function SearchPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Search</h1>
-      <EntityDropdown value={collection} onChange={(c) => { setCollection(c); setPage(0) }} />
+      <EntityDropdown activeOnly value={collection} onChange={(c) => { setCollection(c); setPage(0) }} />
       <SearchBar
         placeholder={collection ? `Search across ${collection}...` : 'Select a collection first'}
         onSubmit={setQ}

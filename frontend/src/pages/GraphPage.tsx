@@ -38,7 +38,7 @@ export default function GraphPage() {
             </Button>
           </>
         )}
-        <EntityDropdown value={collection} onChange={setCollection} />
+        <EntityDropdown activeOnly value={collection} onChange={setCollection} />
         <Button
           onClick={() => graph.refetch()}
           disabled={!collection || graph.isFetching || isFtsMode}
