@@ -51,16 +51,29 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
     # ETA is then based only on THIS run's elapsed/work ratio.
     _resume_offset: list[int | None] = [None]
 
+    # _work_t0: wall-clock captured the moment REAL work first registers
+    # (work_this_run > 0). On a resume the engine first re-fetches and skips the
+    # already-done chunks (no new work counted) before embedding resumes; _t0 starts
+    # before that skip phase, so basing the ETA on (_t0..now) would charge the dead
+    # skip time against the rate and inflate/destabilise the early estimate. The ETA
+    # clock therefore starts here, not at _t0. elapsed_seconds still reports total
+    # run wall-clock (from _t0).
+    _work_t0: list[float | None] = [None]
+
     def _on_progress(phase: str, done: int, total: int) -> None:
-        elapsed = time.perf_counter() - _t0
+        now = time.perf_counter()
+        elapsed = now - _t0
         if _resume_offset[0] is None:
             _resume_offset[0] = done  # captured exactly once on first call
         work_this_run = done - _resume_offset[0]
+        if work_this_run > 0 and _work_t0[0] is None:
+            _work_t0[0] = now  # ETA clock starts when real work resumes (post skip-phase)
+        work_elapsed = (now - _work_t0[0]) if _work_t0[0] is not None else 0.0
         percent = round(done / total * 100, 1) if total > 0 else 0.0
-        # Require at least 10s elapsed + meaningful work so the rate estimate is stable.
+        # Require at least 10s of REAL work + meaningful progress so the rate is stable.
         eta = (
-            int(elapsed / work_this_run * (total - done))
-            if work_this_run > 0 and elapsed >= 10.0
+            int(work_elapsed / work_this_run * (total - done))
+            if work_this_run > 0 and work_elapsed >= 10.0
             else None
         )
         app_state.sync_progress = {
