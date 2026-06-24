@@ -155,6 +155,10 @@ class FtsConfig(BaseModel):
     language: str = "en"
     match_mode: Literal["and", "or"] = "and"  # Phase 23: AND/OR filter mode
     use_omw: bool = False  # Phase 23: download OMW at sync time
+    # Store the FTS indexes (sparse BM25 + _fts_text payload) on disk instead of RAM.
+    # Relevant for fts/bm25 (no dense vectors). The effective on-disk for these indexes
+    # is `fts.on_disk OR qdrant_opts.on_disk`, so either flag works in any mode.
+    on_disk: bool = False
 
 
 class QdrantQuantizationConfig(BaseModel):

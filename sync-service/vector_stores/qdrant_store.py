@@ -244,6 +244,14 @@ class QdrantVectorStore(BaseVectorStore):
         _quant_cfg_obj = getattr(qdrant_opts, "quantization", None) if qdrant_opts else None
         _quant_type = getattr(_quant_cfg_obj, "type", "none") if _quant_cfg_obj else "none"
 
+        # on_disk for the FTS/sparse indexes (sparse BM25 + _fts_text payload index).
+        # Available in ANY mode: effective flag is fts.on_disk OR qdrant_opts.on_disk.
+        # qdrant_opts.on_disk already drives the dense VectorParams below; here we make the
+        # same intent reach the sparse/text indexes too (the only components in fts/bm25).
+        _fts_cfg = getattr(cfg.vector_store, "fts", None)
+        _fts_on_disk = bool(getattr(_fts_cfg, "on_disk", False)) if _fts_cfg else False
+        _index_on_disk = _on_disk or _fts_on_disk
+
         # Build vectors_config (dense, for hybrid/vector modes)
         vectors_cfg: dict = {}
         if mode in ("hybrid", "vector"):
@@ -284,14 +292,23 @@ class QdrantVectorStore(BaseVectorStore):
         if mode in ("hybrid", "bm25", "fts"):
             text_fields_dict: dict[str, float] = cfg.vector_store.text_fields or {}
             field_names = list(text_fields_dict.keys())
+            # on_disk for sparse vectors goes through SparseIndexParams; only set when
+            # requested so we don't override Qdrant defaults with an explicit False.
+            _sparse_index = (
+                qmodels.SparseIndexParams(on_disk=True) if _index_on_disk else None
+            )
             if mode in ("bm25", "fts") and len(field_names) > 1:
                 sparse_cfg = {
-                    f"sparse_{field}": qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
+                    f"sparse_{field}": qmodels.SparseVectorParams(
+                        modifier=qmodels.Modifier.IDF, index=_sparse_index
+                    )
                     for field in field_names
                 }
             else:
                 sparse_cfg = {
-                    "sparse": qmodels.SparseVectorParams(modifier=qmodels.Modifier.IDF)
+                    "sparse": qmodels.SparseVectorParams(
+                        modifier=qmodels.Modifier.IDF, index=_sparse_index
+                    )
                 }
 
         self._client.create_collection(
@@ -320,6 +337,7 @@ class QdrantVectorStore(BaseVectorStore):
                         language=snowball_lang,
                     ),
                     lowercase=True,
+                    on_disk=_index_on_disk,
                 ),
             )
             logger.info(
