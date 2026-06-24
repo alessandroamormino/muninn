@@ -343,16 +343,40 @@ def _embed_with_retry(
     max_retries: int,
     masked_key: str,
 ) -> list[list[float]]:
-    """Call ``client.embeddings.create`` with exponential-backoff retry on 429.
+    """Call ``client.embeddings.create`` with exponential-backoff retry on transient errors.
 
-    On ``RateLimitError``, logs WARNING per attempt with masked key and retries
-    up to ``max_retries`` times. Other SDK errors are wrapped in
-    ``OpenAIEmbeddingError`` and raised immediately (no retry).
+    Retried (transient, self-healing) up to ``max_retries`` times with backoff:
+      - ``RateLimitError`` (HTTP 429) — respects Retry-After header when present
+      - ``APIStatusError`` with status >= 500 (500/502/503/504 — server-side, e.g. the
+        sporadic HTTP 500 that would otherwise abort a multi-hour sync)
+      - ``APIConnectionError`` / ``APITimeoutError`` (network blips; timeout is a subclass)
 
-    After exhausting all retries, raises ``OpenAIEmbeddingError`` containing the
-    masked key (never the raw key).
+    Not retried (won't self-heal) — wrapped in ``OpenAIEmbeddingError`` and raised at once:
+      - ``APIStatusError`` with status < 500 (400/401/403/404 — bad request, auth, etc.)
+
+    A WARNING is logged per retry. The raw key never appears in any log or exception —
+    only ``masked_key``.
     """
     last_exc: Exception | None = None
+
+    def _sleep_backoff(attempt: int, retry_after: str | float | None, label: str) -> None:
+        if retry_after:
+            delay = float(retry_after)
+        else:
+            delay = min(_INITIAL_DELAY * (2.0 ** attempt), _MAX_DELAY)
+        jitter = delay * _JITTER_FACTOR * (random.random() * 2 - 1)
+        sleep_secs = max(0.0, delay + jitter)
+        logger.warning(
+            "OpenAI %s — retry %d/%d, sleeping %.1fs (key: %s)",
+            label, attempt + 1, max_retries, sleep_secs, masked_key,
+        )
+        time.sleep(sleep_secs)
+
+    def _retry_after(exc: Exception) -> str | None:
+        if hasattr(exc, "response") and exc.response is not None:
+            return getattr(exc.response, "headers", {}).get("retry-after")
+        return None
+
     for attempt in range(max_retries + 1):
         try:
             response = client.embeddings.create(
@@ -365,32 +389,29 @@ def _embed_with_retry(
             last_exc = exc
             if attempt >= max_retries:
                 break
-            # Respect Retry-After header if provided by the server.
-            retry_after = None
-            if hasattr(exc, "response") and exc.response is not None:
-                retry_after = getattr(exc.response, "headers", {}).get("retry-after")
-            if retry_after:
-                delay = float(retry_after)
-            else:
-                delay = min(_INITIAL_DELAY * (2.0 ** attempt), _MAX_DELAY)
-            jitter = delay * _JITTER_FACTOR * (random.random() * 2 - 1)
-            sleep_secs = max(0.0, delay + jitter)
-            logger.warning(
-                "OpenAI 429 RateLimitError — retry %d/%d, sleeping %.1fs (key: %s)",
-                attempt + 1,
-                max_retries,
-                sleep_secs,
-                masked_key,
-            )
-            time.sleep(sleep_secs)
+            _sleep_backoff(attempt, _retry_after(exc), "429 RateLimitError")
         except openai.APIConnectionError as exc:
-            raise OpenAIEmbeddingError(f"Cannot connect to OpenAI: {exc}") from exc
+            # Includes APITimeoutError (subclass). Transient network issue → retry.
+            last_exc = exc
+            if attempt >= max_retries:
+                break
+            _sleep_backoff(attempt, None, type(exc).__name__)
         except openai.APIStatusError as exc:
-            raise OpenAIEmbeddingError(
-                f"OpenAI API error HTTP {getattr(exc, 'status_code', '?')} (key: {masked_key})"
-            ) from exc
+            status = getattr(exc, "status_code", None)
+            # Client errors (4xx) won't fix themselves → fail fast. Server errors
+            # (5xx) are transient → retry with backoff.
+            if status is None or status < 500:
+                raise OpenAIEmbeddingError(
+                    f"OpenAI API error HTTP {status if status is not None else '?'} "
+                    f"(key: {masked_key})"
+                ) from exc
+            last_exc = exc
+            if attempt >= max_retries:
+                break
+            _sleep_backoff(attempt, _retry_after(exc), f"server error HTTP {status}")
     raise OpenAIEmbeddingError(
-        f"OpenAI rate limit exceeded after {max_retries} retries (key: {masked_key})"
+        f"OpenAI request failed after {max_retries} retries "
+        f"(last error: {type(last_exc).__name__ if last_exc else 'unknown'}, key: {masked_key})"
     ) from last_exc
 
 

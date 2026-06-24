@@ -254,31 +254,79 @@ class TestKeyMasking:
 # ---------------------------------------------------------------------------
 
 class TestErrorHandling:
-    """Verify non-429 SDK errors are wrapped in OpenAIEmbeddingError."""
+    """Verify transient errors retry and non-retryable errors fail fast."""
 
-    def test_api_connection_error_wrapped(self):
-        with patch("embeddings.openai_adapter.openai.OpenAI") as mock_cls:
-            mock_client = MagicMock()
-            mock_cls.return_value = mock_client
-            conn_err = openai.APIConnectionError.__new__(openai.APIConnectionError)
-            mock_client.embeddings.create.side_effect = conn_err
-            adapter = OpenAIEmbeddingAdapter(_make_cfg())
-            with pytest.raises(OpenAIEmbeddingError, match="Cannot connect"):
-                adapter.embed(["t"])
+    def test_client_4xx_fails_fast_no_retry(self):
+        """4xx (e.g. 400 bad request) won't self-heal → raised immediately, no retry."""
+        status_err = openai.APIStatusError.__new__(openai.APIStatusError)
+        status_err.status_code = 400
 
-    def test_api_status_error_wrapped(self):
-        status_err = openai.APIStatusError("Internal server error")
-        status_err.status_code = 500
-
-        with patch("embeddings.openai_adapter.openai.OpenAI") as mock_cls:
+        with patch("embeddings.openai_adapter.openai.OpenAI") as mock_cls, \
+             patch("embeddings.openai_adapter.time.sleep") as mock_sleep:
             mock_client = MagicMock()
             mock_cls.return_value = mock_client
             mock_client.embeddings.create.side_effect = status_err
-            adapter = OpenAIEmbeddingAdapter(_make_cfg(api_key="sk-test-key"))
+            adapter = OpenAIEmbeddingAdapter(_make_cfg(api_key="sk-test-key", max_retries=3))
             with pytest.raises(OpenAIEmbeddingError) as exc_info:
                 adapter.embed(["t"])
-        assert "HTTP 500" in str(exc_info.value)
+        assert "HTTP 400" in str(exc_info.value)
         assert "sk-test-key" not in str(exc_info.value)
+        # Fail-fast: no backoff sleep, single API call.
+        assert mock_sleep.call_count == 0
+        assert mock_client.embeddings.create.call_count == 1
+
+    def test_server_500_retries_then_succeeds(self):
+        """5xx is transient → retried with backoff, then succeeds."""
+        err = openai.APIStatusError.__new__(openai.APIStatusError)
+        err.status_code = 500
+        err.response = MagicMock(headers={})
+
+        with patch("embeddings.openai_adapter.openai.OpenAI") as mock_cls, \
+             patch("embeddings.openai_adapter.time.sleep") as mock_sleep:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_client.embeddings.create.side_effect = [
+                err, err, _make_embedding_response([[0.1]]),
+            ]
+            adapter = OpenAIEmbeddingAdapter(_make_cfg(max_retries=5))
+            result = adapter.embed(["t"])
+        assert result == [[0.1]]
+        assert mock_sleep.call_count == 2
+
+    def test_server_500_exhausted_raises_masked(self):
+        """5xx that never recovers → raises after max_retries, key masked."""
+        err = openai.APIStatusError.__new__(openai.APIStatusError)
+        err.status_code = 500
+        err.response = MagicMock(headers={})
+
+        with patch("embeddings.openai_adapter.openai.OpenAI") as mock_cls, \
+             patch("embeddings.openai_adapter.time.sleep"):
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_client.embeddings.create.side_effect = err
+            adapter = OpenAIEmbeddingAdapter(_make_cfg(api_key="sk-test-key", max_retries=2))
+            with pytest.raises(OpenAIEmbeddingError) as exc_info:
+                adapter.embed(["t"])
+        msg = str(exc_info.value)
+        assert "after 2 retries" in msg
+        assert "sk-test-key" not in msg
+        assert "sk-te****" in msg
+
+    def test_api_connection_error_retried_then_raises(self):
+        """Connection error is transient → retried, then wrapped on exhaustion."""
+        conn_err = openai.APIConnectionError.__new__(openai.APIConnectionError)
+
+        with patch("embeddings.openai_adapter.openai.OpenAI") as mock_cls, \
+             patch("embeddings.openai_adapter.time.sleep") as mock_sleep:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_client.embeddings.create.side_effect = conn_err
+            adapter = OpenAIEmbeddingAdapter(_make_cfg(max_retries=2))
+            with pytest.raises(OpenAIEmbeddingError):
+                adapter.embed(["t"])
+        # Retried max_retries times before raising.
+        assert mock_sleep.call_count == 2
+        assert mock_client.embeddings.create.call_count == 3
 
 
 # ---------------------------------------------------------------------------
