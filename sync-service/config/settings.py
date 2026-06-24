@@ -56,6 +56,10 @@ class PaginationConfig(BaseModel):
     page_size: int = 100
     # safety cap (anti-pattern: infinite loop)
     max_pages: int = 10000
+    # Proactive throttle: seconds to wait before EACH request (incl. retries are separate).
+    # Needed for rate-limited providers — e.g. MusicBrainz allows 1 req/sec and returns 503
+    # when exceeded. Default 0.0 = no throttle (backward compatible). Set ~1.1 for MusicBrainz.
+    request_delay: float = 0.0
 
 
 class HnswConfig(BaseModel):

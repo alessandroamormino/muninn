@@ -67,6 +67,12 @@ class RestAPIAdapter(BaseSourceAdapter):
                 )
                 break
 
+            # Proactive throttle: space out requests to respect provider rate limits
+            # (e.g. MusicBrainz 1 req/sec). Applied before every request so the very
+            # first one is delayed too — negligible cost, keeps us strictly under the cap.
+            if self._pagination.request_delay > 0:
+                time.sleep(self._pagination.request_delay)
+
             headers = self._build_headers()
             # On cursor follow-up hops, do NOT re-apply static or auth params —
             # the next URL already contains them. Only the first request uses static params.
