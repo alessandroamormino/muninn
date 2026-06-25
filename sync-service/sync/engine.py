@@ -413,8 +413,14 @@ class SyncEngine:
         }
         # D-21/D-22 (Phase 13.2): warn when large unquantized collection detected.
         # Key is added ONLY when condition is met -- absent key = no warning.
+        # Must check BOTH quantization paths: vector_store.quantization is the
+        # Weaviate field (ignored by Qdrant), while Qdrant reads
+        # qdrant_opts.quantization.type. Warn only when NEITHER is set, otherwise
+        # a Qdrant collection with qdrant_opts SQ/BQ would get a false warning.
         q = getattr(self._cfg.vector_store, "quantization", "none")
-        if total > 50_000 and q == "none":
+        _qopts = getattr(self._cfg.vector_store, "qdrant_opts", None)
+        q_qdrant = getattr(getattr(_qopts, "quantization", None), "type", "none") if _qopts else "none"
+        if total > 50_000 and q == "none" and q_qdrant == "none":
             msg = (
                 f"Collection has {total:,} records but quantization='none'. "
                 "Consider enabling quantization (pq/bq/sq) to reduce RAM usage."
