@@ -125,6 +125,11 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
     except Exception as exc:  # noqa: BLE001
         logger.error("Sync (%s) fallito: %s", mode, exc, exc_info=True)
         took_ms = int((time.perf_counter() - _t0) * 1000)
+        # Partial inserted: records embedded+upserted by THIS run before it crashed.
+        # sync_progress["done"] = resume_offset + work_this_run; subtract the offset
+        # so a resumed-then-failed run reports only what it added, not prior runs'.
+        _last_done = (getattr(app_state, "sync_progress", None) or {}).get("done", 0)
+        _partial_inserted = max(0, _last_done - (_resume_offset[0] or 0))
         app_state.sync_status = {
             "status": "failed",
             "last_run": {
@@ -143,7 +148,7 @@ def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:
                 model=fresh_settings.embedding.model,
                 source_type=fresh_settings.source.type,
                 collection=fresh_settings.vector_store.collection,
-                inserted=0,
+                inserted=_partial_inserted,
                 updated=0,
                 skipped_records=0,
                 errors=1,
