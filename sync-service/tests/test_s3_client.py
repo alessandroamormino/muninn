@@ -161,13 +161,13 @@ class TestUpload:
 
     def test_bucket_created_when_not_exists(self, monkeypatch, cfg):
         """upload() must call create_bucket when head_bucket raises a 404 ClientError."""
-        import botocore.exceptions  # type: ignore[import]
+        # Create a fake ClientError without requiring botocore to be installed
+        class FakeClientError(Exception):
+            def __init__(self, code: str) -> None:
+                self.response = {"Error": {"Code": code, "Message": "NoSuchBucket"}}
 
         mock_s3 = MagicMock()
-        error_response = {"Error": {"Code": "404", "Message": "NoSuchBucket"}}
-        mock_s3.head_bucket.side_effect = botocore.exceptions.ClientError(
-            error_response, "HeadBucket"
-        )
+        mock_s3.head_bucket.side_effect = FakeClientError("404")
 
         monkeypatch.setenv("S3_ACCESS", "k")
         monkeypatch.setenv("S3_SECRET", "s")
