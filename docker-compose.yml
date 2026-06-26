@@ -63,6 +63,11 @@ services:
       - ./data:/app/data:rw
       - sync_data:/app/.sync
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Phase 28: backup manager reads snapshot bytes here to upload off-host,
+      # and places restored snapshots here before calling restore_collection.
+      # Security note: orchestrator has rw to snapshot bytes (sensitive data at rest);
+      # encryption-at-rest deferred to Phase 29 / GDPR-03 (T-28-01-03).
+      - qdrant_snapshots:/qdrant/snapshots
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -76,6 +81,30 @@ services:
       vector-db-qdrant:
         condition: service_healthy
         required: false
+    restart: unless-stopped
+
+  minio:
+    # Local S3-compatible storage for offline backup testing (Phase 28).
+    # Activate with: COMPOSE_PROFILES=qdrant,backup in .env (never pass --profile on CLI).
+    # Dev/test only — MINIO_ROOT_USER/PASSWORD are dev defaults; change for any non-local use.
+    image: minio/minio
+    container_name: minio
+    profiles: [backup]
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO web console
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   frontend:
@@ -98,4 +127,6 @@ volumes:
   qdrant_snapshots:
     driver: local
   sync_data:
+    driver: local
+  minio_data:
     driver: local

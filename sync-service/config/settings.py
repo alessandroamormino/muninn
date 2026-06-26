@@ -263,6 +263,37 @@ class GraphConfig(BaseModel):
     filter_fields: list[str] = Field(default_factory=list)
 
 
+class S3BackupConfig(BaseModel):
+    """S3-compatible storage credentials for off-host backup (Phase 28, D-03).
+
+    All fields carry literal ${VAR} strings and are resolved at runtime via
+    _resolve_env_vars — never at parse time. Credentials must NOT appear in
+    config.yaml or logs.
+    """
+    model_config = ConfigDict(extra="ignore")
+    access_key: str = ""
+    secret_key: str = ""
+    bucket: str = ""
+    endpoint_url: str | None = None
+    region: str | None = None
+
+
+class BackupConfig(BaseModel):
+    """Backup policy config (Phase 28, BAK-01/BAK-04).
+
+    s3:       S3-compatible storage creds (resolved from ${VAR} at runtime).
+    schedule: Cron string or "manual"; validated at runtime by scheduler.is_cron_schedule.
+              Do NOT add cron parsing here — reuse the existing validator (D-06).
+    keep_n:   Retention: keep the N newest bundles per collection (default 7, D-06).
+    enabled:  False by default so existing stacks are unaffected until opted in.
+    """
+    model_config = ConfigDict(extra="ignore")
+    s3: S3BackupConfig = Field(default_factory=S3BackupConfig)
+    schedule: str = "manual"
+    keep_n: int = 7
+    enabled: bool = False
+
+
 class AppConfig(BaseModel):
     source: SourceConfig = Field(default_factory=SourceConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
@@ -270,6 +301,9 @@ class AppConfig(BaseModel):
     sync: SyncConfig = Field(default_factory=SyncConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     graph: GraphConfig = Field(default_factory=GraphConfig)
+    # Phase 28: Backup & Disaster Recovery (BAK-01/BAK-04).
+    # Optional block — configs without backup: parse unchanged (same pattern as qdrant_opts).
+    backup: BackupConfig = Field(default_factory=BackupConfig)
 
     # Vector store URL — VECTOR_STORE_URL takes precedence (Phase 15 D-02).
     # Falls back to legacy WEAVIATE_URL for backward compatibility.

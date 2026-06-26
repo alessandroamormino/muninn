@@ -50,3 +50,6 @@ wn>=1.1.0,<2.0.0
 
 # Docker Engine API client (Phase 27 — Resource Monitoring Dashboard)
 docker>=7.1.0,<8.0.0
+
+# Backup / S3 transfer (Phase 28 — off-host backup via any S3-compatible endpoint)
+boto3>=1.34.0,<2.0.0
