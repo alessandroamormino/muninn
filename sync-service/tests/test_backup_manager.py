@@ -113,10 +113,11 @@ class TestRunBackupSnapshotReuse:
                               state_roots=(str(tmp_path / "noexist"),))
 
         assert manifest["snapshot_name"] == "snapshot-2024-01-01-00-00-00.snapshot"
-        # S3 upload key must use the returned name, not anything constructed
-        upload_keys = [c.args[1] for c in s3.upload.call_args_list]
-        assert any("snapshot-2024-01-01-00-00-00.snapshot" in k for k in upload_keys), (
-            f"Returned snapshot name not in any S3 key: {upload_keys}"
+        # S3 upload's local source path must contain the returned snapshot name
+        # (S3 key is fixed as 'snapshot.snapshot'; the name drives which local file is read)
+        first_upload_local = s3.upload.call_args_list[0].args[0]
+        assert "snapshot-2024-01-01-00-00-00.snapshot" in first_upload_local, (
+            f"Returned snapshot name not used in local source path: {first_upload_local!r}"
         )
 
 
