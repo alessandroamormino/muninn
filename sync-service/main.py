@@ -31,6 +31,7 @@ from api.logs import router as logs_router
 from api.upload import router as upload_router
 from api.graph import router as graph_router
 from api.entities import router as entities_router
+from api.backup import router as backup_router
 from api.auth import router as auth_router, _limiter as auth_limiter
 from api.admin import router as admin_router
 from api.history import router as history_router
@@ -42,6 +43,7 @@ from sync.log_store import LogStore
 from sync.history_store import HistoryStore
 from sync.cache_adapters import build_cache_adapter
 from sync.entity_state_store import EntityStateStore
+from backup.catalog import BackupCatalog
 from config.settings import _CONFIG_PATH, load_config, settings
 from embeddings import build_embedding_adapter
 from sync.engine import SyncEngine
@@ -159,6 +161,10 @@ async def lifespan(app: FastAPI):
     app.state.entity_state_store = EntityStateStore()
     app.state.unload_progress = None  # populated during unload/load, SEPARATE from sync_progress (Pitfall 6)
     logger.info("EntityStateStore ready at /app/.sync/entity_state.json")
+    # Phase 28: backup catalog + progress (separate from sync_progress/unload_progress, Pitfall 6)
+    app.state.backup_catalog = BackupCatalog()
+    app.state.backup_progress = None
+    logger.info("BackupCatalog ready at /app/.sync/backup_catalog.json")
     scheduler = build_scheduler(app.state, settings)
     app.state.scheduler = scheduler
     if scheduler is not None:
@@ -225,6 +231,7 @@ app.include_router(logs_router)
 app.include_router(upload_router)
 app.include_router(graph_router)
 app.include_router(entities_router)
+app.include_router(backup_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(history_router)
