@@ -8,6 +8,7 @@ import SyncTab from './settings/SyncTab'
 import YamlEditor from './settings/YamlEditor'
 import EntityInfoPanel from './settings/EntityInfoPanel'
 import LogsTab from './settings/LogsTab'
+import BackupTab from './settings/BackupTab'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Card } from '@/components/ui/card'
 
@@ -58,6 +59,7 @@ export default function EntitiesPage() {
               <TabsTrigger value="info">Info</TabsTrigger>
               <TabsTrigger value="sync">Sync</TabsTrigger>
               <TabsTrigger value="logs">Logs</TabsTrigger>
+              <TabsTrigger value="backup">Backup</TabsTrigger>
             </TabsList>
             <TabsContent value="config">
               <YamlEditor collection={mode.collection} />
@@ -70,6 +72,9 @@ export default function EntitiesPage() {
             </TabsContent>
             <TabsContent value="logs">
               <LogsTab collection={mode.collection} />
+            </TabsContent>
+            <TabsContent value="backup">
+              <BackupTab collection={mode.collection} />
             </TabsContent>
           </Tabs>
         )}
