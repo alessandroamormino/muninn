@@ -58,6 +58,35 @@ S3_BACKUP_REGION=us-east-1
 The bucket `smart-search-backups` is **auto-created by the S3 client on the first
 backup** — no manual `mc mb` / `aws s3 mb` step is required.
 
+> **Per-entity `backup:` block (required).** The S3 target is resolved from each
+> entity's OWN `configuration/{Entity}/config.yaml`, not from a global singleton
+> (the global `configuration/config.yaml` is itself just one more entity). An
+> entity with no `backup:` block — or an empty bucket — cannot be backed up and
+> the API returns `400`. Add this block to every entity you want to back up:
+>
+> ```yaml
+> backup:
+>   enabled: true
+>   schedule: manual          # or a cron string for scheduled backups
+>   keep_n: 7                 # retention: newest N bundles per collection
+>   s3:
+>     access_key: ${S3_BACKUP_ACCESS_KEY}
+>     secret_key: ${S3_BACKUP_SECRET_KEY}
+>     bucket: ${S3_BACKUP_BUCKET}
+>     endpoint_url: ${S3_BACKUP_ENDPOINT_URL}
+>     region: ${S3_BACKUP_REGION}
+> ```
+>
+> Credentials stay as `${VAR}` and are resolved from `.env` at runtime (D-03).
+
+> **After a restore, the query embedder must match the index embedder.** Restore
+> brings back the document vectors *as-is* (no re-embedding). Semantic `/search`
+> still embeds each **query** at runtime, and that must use the **same model** the
+> documents were indexed with (same vector space + dimensions) — otherwise Qdrant
+> compares incompatible vectors. Verify the restored entity's `embedding:` block
+> (`type`/`model`) matches what produced the snapshot, and that the embedder
+> (e.g. Ollama) is reachable.
+
 > **Same procedure, real S3.** To recover against AWS S3 / Backblaze B2 / any
 > S3-compatible bucket, change **only** these values: `S3_BACKUP_ENDPOINT_URL`
 > (set it to the provider endpoint, or **unset it entirely for AWS S3**),
