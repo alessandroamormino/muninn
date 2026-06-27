@@ -35,7 +35,7 @@ from auth.user_store import UserRecord
 from api.upload import _COLLECTION_RE, _resolve_config_path
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["collections"])
 
 
 def _run_unload_bg(app_state, collection: str) -> None:

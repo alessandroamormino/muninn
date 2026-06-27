@@ -20,7 +20,7 @@ from auth.user_store import UserRecord
 from api.upload import _write_config, _CONFIG_ROOT, _COLLECTION_RE, _ENV_VAR_RE, _resolve_config_path
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["config"])
 
 
 # ---------------------------------------------------------------------------

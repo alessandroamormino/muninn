@@ -20,7 +20,7 @@ from auth.user_store import UserRecord
 from monitoring.docker_stats import get_docker_client, get_compose_project, parse_container_metrics
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["metrics"])
 
 
 @router.get("/metrics")

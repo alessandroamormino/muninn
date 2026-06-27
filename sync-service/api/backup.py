@@ -29,7 +29,7 @@ from backup.s3_client import S3BackupClient
 from config.settings import BackupConfig, load_config
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["backup"])
 
 
 def _entity_backup_config(name: str) -> BackupConfig:

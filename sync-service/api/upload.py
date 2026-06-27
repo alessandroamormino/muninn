@@ -31,7 +31,7 @@ from api.setup import (
 from llm.ollama_llm import LLMError, OllamaLLMClient
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["upload"])
 
 _DATA_ROOT = Path("/app/data")
 _ALLOWED_CONTENT_TYPES = {"text/csv", "application/csv", "text/plain", "application/octet-stream"}

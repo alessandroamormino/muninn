@@ -33,7 +33,7 @@ from config.settings import _CONFIG_PATH, AppConfig, load_config, settings
 from llm.ollama_llm import LLMError, OllamaLLMClient
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["graph"])
 _CONFIG_ROOT = _CONFIG_PATH.parent  # configuration/ dir (container) or project_root/configuration/ (host)
 
 # Path-traversal guard: only alphanumerics, underscores, hyphens allowed (T-11-01).

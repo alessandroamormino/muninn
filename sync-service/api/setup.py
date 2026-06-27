@@ -23,7 +23,7 @@ from config.settings import settings
 from llm.ollama_llm import LLMError, OllamaLLMClient
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["setup"])
 
 _DATA_ROOT = Path("/app/data")
 

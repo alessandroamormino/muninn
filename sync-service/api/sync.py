@@ -19,7 +19,7 @@ from config.settings import load_config, settings
 from sync.engine import SyncEngine
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["sync"])
 
 
 def _run_sync_bg(app_state, mode: str, triggered_by: str = "api") -> None:

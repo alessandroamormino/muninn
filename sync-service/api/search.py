@@ -74,7 +74,7 @@ _IT_STOPWORDS = frozenset({
 })
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["search"])
 
 
 def _parse_negation(q: str) -> tuple[str, list[str]]:

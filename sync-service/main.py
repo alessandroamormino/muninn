@@ -239,7 +239,7 @@ app.include_router(config_router)
 app.include_router(metrics_router)
 
 
-@app.get("/health")
+@app.get("/health", tags=["health"])
 async def health(request: Request, response: Response) -> dict:
     """Health check. Probes vector store is_live(); returns HTTP 503 if unreachable.
 
@@ -263,7 +263,7 @@ _INFO_COLLECTION_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _INFO_CONFIG_ROOT = _CONFIG_PATH.parent
 
 
-@app.get("/info")
+@app.get("/info", tags=["info"])
 async def info(
     request: Request,
     collection: Optional[str] = Query(None, description="Nome collection (es. 'CollaboratoriDB'). Se omesso usa config globale."),
