@@ -120,8 +120,10 @@ def build_scheduler(app_state, settings):
             if not app_state.sync_lock.acquire(blocking=False):
                 logger.warning("Scheduled backup fired but lock busy — skipping.")
                 return
-            # Lock acquired — _run_backup_bg will release it in finally
-            _run_backup_bg(app_state, _backup_collection)
+            # Lock acquired — _run_backup_bg will release it in finally.
+            # settings here IS the scheduled entity's own config, so settings.backup
+            # is that entity's per-entity backup block.
+            _run_backup_bg(app_state, _backup_collection, settings.backup)
 
         backup_trigger = CronTrigger(
             minute=bminute,

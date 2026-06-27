@@ -26,22 +26,42 @@ from auth.user_store import UserRecord
 from api.upload import _COLLECTION_RE, _resolve_config_path
 from backup.manager import run_backup, run_restore
 from backup.s3_client import S3BackupClient
-from config.settings import settings
+from config.settings import BackupConfig, load_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _entity_backup_config(name: str) -> BackupConfig:
+    """Resolve the backup config from the entity's OWN config.yaml.
+
+    Each entity (including the global config.yaml, which is itself just one
+    more entity) carries its own backup: block — there is no shared singleton.
+    Raises HTTPException(404) if the entity has no config, (400) if it has no
+    usable backup target (empty bucket).
+    """
+    path = _resolve_config_path(name)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"No config found for collection '{name}'")
+    cfg = load_config(path).backup
+    if not cfg.s3.bucket:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Collection '{name}' has no backup.s3.bucket configured in its config.yaml",
+        )
+    return cfg
 
 
 # ---------------------------------------------------------------------------
 # Background tasks
 # ---------------------------------------------------------------------------
 
-def _run_backup_bg(app_state, collection: str) -> None:
+def _run_backup_bg(app_state, collection: str, cfg: BackupConfig) -> None:
     """Snapshot → upload → catalog → prune. Releases sync_lock in finally (Pitfall 9)."""
     try:
         app_state.backup_progress = {"collection": collection, "phase": "snapshotting"}
-        s3 = S3BackupClient(settings.backup.s3)
-        keep_n = settings.backup.keep_n
+        s3 = S3BackupClient(cfg.s3)
+        keep_n = cfg.keep_n
         app_state.backup_progress = {"collection": collection, "phase": "uploading"}
         manifest = run_backup(
             app_state.vector_store,
@@ -63,11 +83,11 @@ def _run_backup_bg(app_state, collection: str) -> None:
             app_state.sync_lock.release()
 
 
-def _run_restore_bg(app_state, collection: str, bundle_id: str) -> None:
+def _run_restore_bg(app_state, collection: str, bundle_id: str, cfg: BackupConfig) -> None:
     """Download snapshot → restore_collection. Releases sync_lock in finally (Pitfall 9)."""
     try:
         app_state.backup_progress = {"collection": collection, "phase": "restoring", "bundle_id": bundle_id}
-        s3 = S3BackupClient(settings.backup.s3)
+        s3 = S3BackupClient(cfg.s3)
         run_restore(
             app_state.vector_store,
             s3,
@@ -103,15 +123,14 @@ async def trigger_backup(
     """Trigger an off-host backup of collection *name* (BAK-01)."""
     if not _COLLECTION_RE.match(name):
         raise HTTPException(status_code=422, detail="Invalid collection name")
-    if _resolve_config_path(name) is None:
-        raise HTTPException(status_code=404, detail=f"No config found for collection '{name}'")
+    cfg = _entity_backup_config(name)
 
     lock_acquired = False
     try:
         if not request.app.state.sync_lock.acquire(blocking=False):
             raise HTTPException(status_code=409, detail="Sync/backup/unload already in progress")
         lock_acquired = True
-        background_tasks.add_task(_run_backup_bg, request.app.state, name)
+        background_tasks.add_task(_run_backup_bg, request.app.state, name, cfg)
         lock_acquired = False  # background task now owns the lock release
     except Exception:
         if lock_acquired:
@@ -139,15 +158,14 @@ async def restore_backup(
         raise HTTPException(status_code=422, detail="Invalid collection name")
     if not _COLLECTION_RE.match(bundle_id):
         raise HTTPException(status_code=422, detail="Invalid bundle_id")
-    if _resolve_config_path(name) is None:
-        raise HTTPException(status_code=404, detail=f"No config found for collection '{name}'")
+    cfg = _entity_backup_config(name)
 
     lock_acquired = False
     try:
         if not request.app.state.sync_lock.acquire(blocking=False):
             raise HTTPException(status_code=409, detail="Sync/backup/unload already in progress")
         lock_acquired = True
-        background_tasks.add_task(_run_restore_bg, request.app.state, name, bundle_id)
+        background_tasks.add_task(_run_restore_bg, request.app.state, name, bundle_id, cfg)
         lock_acquired = False  # background task now owns the lock release
     except Exception:
         if lock_acquired:
@@ -193,7 +211,7 @@ async def delete_backup(
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' not found in catalog")
 
-    s3 = S3BackupClient(settings.backup.s3)
+    s3 = S3BackupClient(_entity_backup_config(entry["collection"]).s3)
     for s3_key in entry.get("s3_keys", {}).values():
         try:
             s3.delete(s3_key)
