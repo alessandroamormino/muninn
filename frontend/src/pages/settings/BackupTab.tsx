@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -33,14 +34,33 @@ export default function BackupTab({ collection }: { collection: string }) {
   const { data: catalog } = useBackups()
   const { data: progress } = useBackupProgress()
   const [confirm, setConfirm] = useState<Confirm>(null)
+  const qc = useQueryClient()
 
   const rows = Object.values(catalog ?? {})
     .filter((b) => b.collection === collection)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
 
   const isForThis = progress?.collection === collection
-  const inFlight = isForThis && ['snapshotting', 'uploading', 'restoring'].includes(progress?.phase ?? '')
+  const phase = isForThis ? progress?.phase : undefined
+  const inFlight = ['snapshotting', 'uploading', 'restoring'].includes(phase ?? '')
   const busy = inFlight || trigger.isPending || restore.isPending || del.isPending
+
+  // Only surface a terminal banner for an op we actually watched run this
+  // session — a stale `done` left on the server must NOT reappear on reload.
+  const sawInFlight = useRef(false)
+  useEffect(() => {
+    if (inFlight) sawInFlight.current = true
+  }, [inFlight])
+
+  // When the watched op reaches a terminal phase, refresh the catalog so the
+  // new bundle (or its removal) shows without a manual page reload.
+  useEffect(() => {
+    if (sawInFlight.current && (phase === 'done' || phase === 'failed')) {
+      qc.invalidateQueries({ queryKey: ['backups'] })
+    }
+  }, [phase, qc])
+
+  const showDone = sawInFlight.current && (phase === 'done' || phase === 'failed')
 
   return (
     <div className="mt-4 space-y-6">
@@ -64,7 +84,7 @@ export default function BackupTab({ collection }: { collection: string }) {
         </div>
       </div>
 
-      {isForThis && progress?.phase && (
+      {(inFlight || showDone) && (
         <div className="rounded-lg border bg-muted/40 p-3 text-sm flex items-center gap-2">
           {inFlight && (
             <span className="relative flex h-2.5 w-2.5">
@@ -72,8 +92,14 @@ export default function BackupTab({ collection }: { collection: string }) {
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-sky-500" />
             </span>
           )}
-          <span className="font-medium">{progress.phase}</span>
-          {progress.error && <span className="text-red-500">— {progress.error}</span>}
+          {showDone && phase === 'done' && (
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+          )}
+          {showDone && phase === 'failed' && (
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+          )}
+          <span className="font-medium">{phase}</span>
+          {progress?.error && <span className="text-red-500">— {progress.error}</span>}
         </div>
       )}
 
