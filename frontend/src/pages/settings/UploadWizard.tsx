@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
@@ -10,6 +11,7 @@ import { useQueryClient } from '@tanstack/react-query'
 type Step = 'upload' | 'review' | 'confirming'
 
 export default function UploadWizard({ onDone }: { onDone: (collection: string) => void }) {
+  const { t } = useTranslation()
   const [step, setStep] = useState<Step>('upload')
   const [config, setConfig] = useState<SuggestedConfig | null>(null)
   const upload = useUpload()
@@ -32,7 +34,7 @@ export default function UploadWizard({ onDone }: { onDone: (collection: string) 
     setStep('confirming')
     try {
       const r = await confirm.mutateAsync(config)
-      toast.success('Configuration saved. Sync started in background.')
+      toast.success(t('upload.saved'))
       qc.invalidateQueries({ queryKey: ['collections'] })
       onDone(r.collection)
     } catch (e) {
@@ -44,9 +46,9 @@ export default function UploadWizard({ onDone }: { onDone: (collection: string) 
   if (step === 'upload') {
     return (
       <div className="space-y-4">
-        <h3 className="text-base font-semibold">Step 1 — Upload file</h3>
+        <h3 className="text-base font-semibold">{t('upload.step1')}</h3>
         <p className="text-sm text-muted-foreground">
-          Drop a CSV or JSON file here, or click to browse.
+          {t('upload.step1hint')}
         </p>
         <label className="block border-2 border-dashed rounded-md p-8 text-center cursor-pointer hover:bg-muted">
           <input
@@ -56,7 +58,7 @@ export default function UploadWizard({ onDone }: { onDone: (collection: string) 
             onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
           />
           <div className="text-sm">
-            {upload.isPending ? 'Uploading and analyzing...' : 'Click or drop a CSV/JSON file'}
+            {upload.isPending ? t('upload.uploading') : t('upload.dropHint')}
           </div>
         </label>
         {upload.isPending && <Progress value={50} />}
@@ -67,43 +69,43 @@ export default function UploadWizard({ onDone }: { onDone: (collection: string) 
   if (step === 'review' && config) {
     return (
       <div className="space-y-4">
-        <h3 className="text-base font-semibold">Step 2 — Review suggested config</h3>
-        <p className="text-sm text-muted-foreground">Edit any field before confirming.</p>
+        <h3 className="text-base font-semibold">{t('upload.step2')}</h3>
+        <p className="text-sm text-muted-foreground">{t('upload.step2hint')}</p>
         <div className="space-y-2">
           <FieldRow
-            label="Collection"
+            label={t('upload.collection')}
             value={config.collection}
             onChange={(v) => setConfig({ ...config, collection: v })}
           />
           <FieldRow
-            label="ID field"
+            label={t('upload.idField')}
             value={config.id_field}
             onChange={(v) => setConfig({ ...config, id_field: v })}
           />
           <ListField
-            label="Text fields (vectorized)"
+            label={t('upload.textFields')}
             value={config.text_fields}
             onChange={(v) => setConfig({ ...config, text_fields: v })}
           />
           <ListField
-            label="Metadata fields"
+            label={t('upload.metadataFields')}
             value={config.metadata_fields}
             onChange={(v) => setConfig({ ...config, metadata_fields: v })}
           />
           <ListField
-            label="Output fields"
+            label={t('upload.outputFields')}
             value={config.output_fields}
             onChange={(v) => setConfig({ ...config, output_fields: v })}
           />
           <FieldRow
-            label="Delimiter (1 char)"
+            label={t('upload.delimiter')}
             value={config.delimiter}
             onChange={(v) => setConfig({ ...config, delimiter: v.slice(0, 1) || ',' })}
           />
         </div>
         <div className="flex gap-2">
-          <Button onClick={handleConfirm}>Confirm and start sync</Button>
-          <Button variant="outline" onClick={() => setStep('upload')}>Back</Button>
+          <Button onClick={handleConfirm}>{t('upload.confirmSync')}</Button>
+          <Button variant="outline" onClick={() => setStep('upload')}>{t('common.back')}</Button>
         </div>
       </div>
     )
@@ -111,9 +113,9 @@ export default function UploadWizard({ onDone }: { onDone: (collection: string) 
 
   return (
     <div className="space-y-4">
-      <h3 className="text-base font-semibold">Step 3 — Confirming</h3>
+      <h3 className="text-base font-semibold">{t('upload.step3')}</h3>
       <Progress value={80} />
-      <p className="text-sm text-muted-foreground">Writing config and starting sync...</p>
+      <p className="text-sm text-muted-foreground">{t('upload.writing')}</p>
     </div>
   )
 }
@@ -144,9 +146,10 @@ function ListField({
   value: string[]
   onChange: (v: string[]) => void
 }) {
+  const { t } = useTranslation()
   return (
     <label className="block text-sm">
-      <span className="text-muted-foreground">{label} (comma-separated)</span>
+      <span className="text-muted-foreground">{label} {t('common.commaSeparated')}</span>
       <Input
         value={value.join(', ')}
         onChange={(e) =>

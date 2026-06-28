@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import StatusBadge from './StatusBadge'
 import type { LogRun } from '@/api/logs'
@@ -16,18 +17,19 @@ function formatTime(iso: string): string {
 }
 
 export default function LogsTable({ rows }: { rows: LogRun[] }) {
+  const { t } = useTranslation()
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Time</TableHead>
-          <TableHead>Type</TableHead>
-          <TableHead className="text-right">Duration</TableHead>
-          <TableHead className="text-right">Inserted</TableHead>
-          <TableHead className="text-right">Updated</TableHead>
-          <TableHead className="text-right">Skipped</TableHead>
-          <TableHead className="text-right">Errors</TableHead>
-          <TableHead>Status</TableHead>
+          <TableHead>{t('logTable.time')}</TableHead>
+          <TableHead>{t('logTable.type')}</TableHead>
+          <TableHead className="text-right">{t('logTable.duration')}</TableHead>
+          <TableHead className="text-right">{t('logTable.inserted')}</TableHead>
+          <TableHead className="text-right">{t('logTable.updated')}</TableHead>
+          <TableHead className="text-right">{t('logTable.skipped')}</TableHead>
+          <TableHead className="text-right">{t('logTable.errors')}</TableHead>
+          <TableHead>{t('logTable.status')}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>

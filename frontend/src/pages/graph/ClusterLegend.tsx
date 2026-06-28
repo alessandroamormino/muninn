@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type { GraphCluster } from '@/api/graph'
 import { Badge } from '@/components/ui/badge'
 
@@ -36,12 +37,13 @@ interface Props {
 }
 
 export default function ClusterLegend({ clusters, onClusterClick, activeClusterId }: Props) {
+  const { t } = useTranslation()
   if (clusters.length === 0) return null
   return (
     <div className="absolute top-2 bottom-2 left-2 z-10 bg-card/95 backdrop-blur rounded-md border p-3 max-w-xs flex flex-col">
       <div className="text-xs font-medium mb-1 text-muted-foreground flex-shrink-0">
-        Clusters
-        <span className="ml-1 text-[10px] opacity-60">(hover # for info)</span>
+        {t('graphDetail.clusters')}
+        <span className="ml-1 text-[10px] opacity-60">{t('graphDetail.clustersHint')}</span>
       </div>
       <ul className="flex-1 min-h-0 overflow-y-auto space-y-1 pr-1 mb-2">
         {clusters.map((c) => (
@@ -61,7 +63,7 @@ export default function ClusterLegend({ clusters, onClusterClick, activeClusterI
             <Badge
               variant="secondary"
               className="text-xs cursor-default"
-              title={`${c.size} records in this semantic cluster`}
+              title={t('graphDetail.recordsInCluster', { n: c.size })}
             >
               {c.size}
             </Badge>
@@ -69,8 +71,8 @@ export default function ClusterLegend({ clusters, onClusterClick, activeClusterI
         ))}
       </ul>
       <div className="pt-2 border-t text-xs text-muted-foreground flex-shrink-0">
-        Lines = semantic similarity
-        <br/>(K-nearest neighbors in vector space)
+        {t('graphDetail.legendLines')}
+        <br/>{t('graphDetail.legendKnn')}
       </div>
     </div>
   )

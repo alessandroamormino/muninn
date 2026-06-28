@@ -1,18 +1,21 @@
 import { NavLink } from 'react-router'
+import { useTranslation } from 'react-i18next'
 import { Separator } from '@/components/ui/separator'
+import LanguageToggle from '@/components/LanguageToggle'
 
 const NAV = [
-  { to: '/search', label: 'Search' },
-  { to: '/entities', label: 'Entities' },
-  { to: '/settings', label: 'Settings' },
-  { to: '/logs', label: 'Logs' },
-  { to: '/graph', label: 'Knowledge Graph' },
+  { to: '/search', key: 'nav.search' },
+  { to: '/entities', key: 'nav.entities' },
+  { to: '/settings', key: 'nav.settings' },
+  { to: '/logs', key: 'nav.logs' },
+  { to: '/graph', key: 'nav.graph' },
 ]
 
 export default function Sidebar() {
+  const { t } = useTranslation()
   return (
     <aside className="w-60 border-r bg-card flex flex-col">
-      <div className="h-14 border-b flex items-center px-4 text-base font-semibold">smart-search</div>
+      <div className="h-14 border-b flex items-center px-4 text-base font-semibold">{t('app.title')}</div>
       <nav className="flex flex-col p-2 gap-1">
         {NAV.map((n) => (
           <NavLink
@@ -26,11 +29,15 @@ export default function Sidebar() {
               }`
             }
           >
-            {n.label}
+            {t(n.key)}
           </NavLink>
         ))}
       </nav>
       <Separator />
+      <div className="mt-auto p-3 flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">{t('app.language')}</span>
+        <LanguageToggle />
+      </div>
     </aside>
   )
 }

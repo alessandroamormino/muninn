@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useSuggest } from '@/api/search'
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export default function SearchBar({ placeholder, onSubmit, disabled, collection }: Props) {
+  const { t } = useTranslation()
   const [draft, setDraft] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const [open, setOpen] = useState(true)
@@ -116,7 +118,7 @@ export default function SearchBar({ placeholder, onSubmit, disabled, collection 
           </ul>
         )}
       </div>
-      <Button type="submit" disabled={disabled || !draft.trim()}>Search</Button>
+      <Button type="submit" disabled={disabled || !draft.trim()}>{t('search.submit')}</Button>
     </form>
   )
 }

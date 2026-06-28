@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -24,6 +25,7 @@ function SourceBadge({ type }: { type: string }) {
 }
 
 function SyncDot({ collection }: { collection: string }) {
+  const { t } = useTranslation()
   const { data } = useSyncStatus()
   if (!data) return null
 
@@ -41,7 +43,7 @@ function SyncDot({ collection }: { collection: string }) {
             <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500" />
           </span>
         </TooltipTrigger>
-        <TooltipContent side="right">Sync in corso…</TooltipContent>
+        <TooltipContent side="right">{t('syncDot.running')}</TooltipContent>
       </Tooltip>
     )
   }
@@ -51,7 +53,7 @@ function SyncDot({ collection }: { collection: string }) {
         <TooltipTrigger asChild>
           <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0 inline-flex" />
         </TooltipTrigger>
-        <TooltipContent side="right">Ultima sync completata</TooltipContent>
+        <TooltipContent side="right">{t('syncDot.done')}</TooltipContent>
       </Tooltip>
     )
   }
@@ -61,7 +63,7 @@ function SyncDot({ collection }: { collection: string }) {
         <TooltipTrigger asChild>
           <span className="h-2 w-2 rounded-full bg-red-500 shrink-0 inline-flex" />
         </TooltipTrigger>
-        <TooltipContent side="right">Ultima sync fallita</TooltipContent>
+        <TooltipContent side="right">{t('syncDot.failed')}</TooltipContent>
       </Tooltip>
     )
   }
@@ -73,6 +75,7 @@ function SyncDot({ collection }: { collection: string }) {
 // event handler (React Rules of Hooks, D-15). The onCheckedChange handler only calls
 // the stable `mutate` callbacks returned by the hooks.
 function EntityRowToggle({ name, status }: { name: string; status?: 'active' | 'unloaded' }) {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const unload = useUnloadEntity()
   const load = useLoadEntity()
@@ -100,7 +103,7 @@ function EntityRowToggle({ name, status }: { name: string; status?: 'active' | '
     <div className="flex items-center gap-1.5 shrink-0">
       {status === 'unloaded' && !inFlight && (
         <span className="text-[9px] font-semibold px-1 py-0.5 rounded bg-amber-100 text-amber-700 leading-none">
-          unloaded
+          {t('entityList.unloaded')}
         </span>
       )}
       {inFlight && (
@@ -109,16 +112,16 @@ function EntityRowToggle({ name, status }: { name: string; status?: 'active' | '
       {failed && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="text-[10px] text-red-500 cursor-help">failed</span>
+            <span className="text-[10px] text-red-500 cursor-help">{t('entityList.failed')}</span>
           </TooltipTrigger>
-          <TooltipContent side="left">{progress?.error ?? 'Operation failed'}</TooltipContent>
+          <TooltipContent side="left">{progress?.error ?? t('entityList.operationFailed')}</TooltipContent>
         </Tooltip>
       )}
       <Switch
         checked={checked}
         disabled={busy}
         onCheckedChange={(next) => (next ? load.mutate(name) : unload.mutate(name))}
-        aria-label={checked ? `Unload ${name}` : `Load ${name}`}
+        aria-label={checked ? t('entityList.unloadAria', { name }) : t('entityList.loadAria', { name })}
       />
     </div>
   )
@@ -134,12 +137,13 @@ interface Props {
 }
 
 export default function EntityList({ collections, selected, onSelect, onCreateCsv, onCreateRestApi, onCreateMySQL }: Props) {
+  const { t } = useTranslation()
   return (
     <div className="flex flex-col h-full">
       {collections.length === 0 ? (
         <div className="text-sm text-muted-foreground py-4 flex-1">
-          <div className="font-medium mb-1">No entities configured</div>
-          <div>Add your first entity by uploading a CSV or connecting a data source.</div>
+          <div className="font-medium mb-1">{t('entityList.noEntitiesTitle')}</div>
+          <div>{t('entityList.noEntitiesHint')}</div>
         </div>
       ) : (
         <ul className="flex-1 space-y-1 overflow-y-auto">
@@ -156,7 +160,7 @@ export default function EntityList({ collections, selected, onSelect, onCreateCs
                   <span className="truncate">{c.name}</span>
                   {c.is_global && (
                     <span className="text-[9px] font-semibold px-1 py-0.5 rounded bg-amber-100 text-amber-700 leading-none shrink-0">
-                      default
+                      {t('common.default')}
                     </span>
                   )}
                 </span>
@@ -168,9 +172,9 @@ export default function EntityList({ collections, selected, onSelect, onCreateCs
         </ul>
       )}
       <div className="space-y-2 pt-3 border-t">
-        <Button size="sm" className="w-full" onClick={onCreateCsv}>Upload CSV</Button>
-        <Button size="sm" variant="outline" className="w-full" onClick={onCreateRestApi}>Add REST API</Button>
-        <Button size="sm" variant="outline" className="w-full" onClick={onCreateMySQL}>Add MySQL</Button>
+        <Button size="sm" className="w-full" onClick={onCreateCsv}>{t('entityList.uploadCsv')}</Button>
+        <Button size="sm" variant="outline" className="w-full" onClick={onCreateRestApi}>{t('entityList.addRest')}</Button>
+        <Button size="sm" variant="outline" className="w-full" onClick={onCreateMySQL}>{t('entityList.addMysql')}</Button>
       </div>
     </div>
   )

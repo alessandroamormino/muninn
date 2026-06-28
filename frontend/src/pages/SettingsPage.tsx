@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -25,6 +26,7 @@ function cpuFraction(pct: number): number {
 }
 
 function ContainerCard({ name, metric }: { name: string; metric: ContainerMetric }) {
+  const { t } = useTranslation()
   return (
     <Card className="p-4">
       <div className="flex items-center justify-between mb-3">
@@ -46,23 +48,23 @@ function ContainerCard({ name, metric }: { name: string; metric: ContainerMetric
         />
       </div>
       <p className="text-xs text-muted-foreground mb-3 tabular-nums">
-        RAM {formatBytes(metric.mem_used)} of {formatBytes(metric.mem_limit)}
+        {t('monitoring.ramOf', { used: formatBytes(metric.mem_used), limit: formatBytes(metric.mem_limit) })}
       </p>
       <dl className="grid grid-cols-2 gap-3 text-xs">
         <div>
-          <dt className="text-muted-foreground">Net I/O</dt>
+          <dt className="text-muted-foreground">{t('monitoring.netio')}</dt>
           <dd className="tabular-nums">
             ↓ {formatBytes(metric.net_rx)}  ↑ {formatBytes(metric.net_tx)}
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground">Block I/O</dt>
+          <dt className="text-muted-foreground">{t('monitoring.blockio')}</dt>
           <dd className="tabular-nums">
             R {formatBytes(metric.blk_read)}  W {formatBytes(metric.blk_write)}
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground">Uptime</dt>
+          <dt className="text-muted-foreground">{t('monitoring.uptime')}</dt>
           <dd className="tabular-nums">{formatUptime(metric.uptime_s)}</dd>
         </div>
       </dl>
@@ -71,29 +73,28 @@ function ContainerCard({ name, metric }: { name: string; metric: ContainerMetric
 }
 
 export default function SettingsPage() {
+  const { t } = useTranslation()
   const { data, isError, isLoading } = useMetrics()
 
   return (
     <Card className="p-6">
       <div className="flex items-center gap-2 mb-6">
-        <h2 className="text-xl font-semibold">Resource Monitoring</h2>
+        <h2 className="text-xl font-semibold">{t('monitoring.title')}</h2>
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="text-muted-foreground text-sm cursor-help">ⓘ</span>
           </TooltipTrigger>
           <TooltipContent side="right" className="max-w-xs">
-            Su macOS questi numeri riflettono l'allocazione della VM di Docker Desktop, non
-            l'hardware fisico del Mac.
+            {t('monitoring.macNote')}
           </TooltipContent>
         </Tooltip>
       </div>
 
       {isError && (
         <div className="flex flex-col items-center justify-center text-center px-6 py-16">
-          <h3 className="text-base font-semibold mb-1">Monitoring non disponibile</h3>
+          <h3 className="text-base font-semibold mb-1">{t('monitoring.unavailableTitle')}</h3>
           <p className="text-sm text-muted-foreground max-w-sm">
-            Impossibile leggere le statistiche Docker. Verifica che il socket sia montato
-            e che l'orchestrator abbia i permessi necessari.
+            {t('monitoring.unavailableHint')}
           </p>
         </div>
       )}
@@ -108,17 +109,17 @@ export default function SettingsPage() {
       {!isError && data && (
         <div className="flex flex-col gap-8">
           <section>
-            <h3 className="text-sm font-semibold text-muted-foreground mb-2">Stack Totals</h3>
+            <h3 className="text-sm font-semibold text-muted-foreground mb-2">{t('monitoring.stackTotals')}</h3>
             <div className="grid grid-cols-2 gap-4">
               <StatCard
-                label="CPU% (total)"
+                label={t('monitoring.cpuTotal')}
                 value={formatCpu(data.totals.cpu_pct).replace('%', '')}
                 unit="%"
                 fraction={cpuFraction(data.totals.cpu_pct)}
                 variant="lg"
               />
               <StatCard
-                label="RAM (total)"
+                label={t('monitoring.ramTotal')}
                 value={formatBytes(data.totals.mem_used).split(' ')[0]}
                 unit={formatBytes(data.totals.mem_used).split(' ')[1]}
                 secondary={`/ ${formatBytes(data.totals.mem_limit)}`}
@@ -129,7 +130,7 @@ export default function SettingsPage() {
           </section>
 
           <section>
-            <h3 className="text-sm font-semibold text-muted-foreground mb-2">Containers</h3>
+            <h3 className="text-sm font-semibold text-muted-foreground mb-2">{t('monitoring.containers')}</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {data.containers.map((c) => (
                 <ContainerCard key={c.name} name={c.name} metric={c} />

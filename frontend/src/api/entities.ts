@@ -26,6 +26,23 @@ export function useUnloadEntity() {
   })
 }
 
+// Purge the exact-match search cache for one entity (admin only — backend enforces).
+// Useful after editing an entity's config.yaml / synonyms.yaml or data (cache TTL is
+// 300s with no auto-invalidation on file edits).
+export function usePurgeEntityCache() {
+  const { token } = useAuth()
+  const on401 = () => (window as unknown as { __on401?: () => void }).__on401?.()
+  const fetchJson = createApiClient(token, on401 as () => void)
+
+  return useMutation({
+    mutationFn: (name: string) =>
+      fetchJson<{ status: string; collection?: string }>(
+        `/api/collections/${encodeURIComponent(name)}/cache`,
+        { method: 'POST' }
+      ),
+  })
+}
+
 export function useLoadEntity() {
   const qc = useQueryClient()
   const { token } = useAuth()

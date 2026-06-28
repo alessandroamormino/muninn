@@ -1,10 +1,11 @@
+import { useTranslation } from 'react-i18next'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const ALL_MODES = [
   { value: 'hybrid', label: 'Hybrid (BM25 + semantico)' },
-  { value: 'vector', label: 'Vector (solo semantico)' },
-  { value: 'bm25', label: 'BM25 (solo keyword)' },
-  { value: 'fts', label: 'FTS (full-text con stemming)' },
+  { value: 'vector', label: 'Vettoriale (kNN semantico)' },
+  { value: 'bm25', label: 'BM25 (keyword, ranking IDF)' },
+  { value: 'fts', label: 'FTS (full-text + frase)' },
 ]
 
 // Modes available per configured search_mode.
@@ -25,6 +26,7 @@ interface Props {
 }
 
 export default function SearchModeSelector({ value, onChange, disabled, configuredMode }: Props) {
+  const { t } = useTranslation()
   const available = AVAILABLE[configuredMode] ?? ['hybrid', 'vector', 'bm25', 'fts']
 
   // Only show selector when there's actually a choice to make
@@ -34,7 +36,7 @@ export default function SearchModeSelector({ value, onChange, disabled, configur
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs text-muted-foreground whitespace-nowrap">Modalità:</span>
+      <span className="text-xs text-muted-foreground whitespace-nowrap">{t('search.mode')}:</span>
       <Select value={value} onValueChange={onChange} disabled={disabled}>
         <SelectTrigger className="w-[220px] h-8 text-sm">
           <SelectValue />

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { GraphNode } from '@/api/graph'
 import { Badge } from '@/components/ui/badge'
 import { colorForCluster } from './ClusterLegend'
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export default function NodeSidebar({ node, onClose, clusterName, clusterSize, neighbors, onHighlight, activeFilter }: Props) {
+  const { t } = useTranslation()
   const [uuidExpanded, setUuidExpanded] = useState(false)
 
   if (!node) return null
@@ -28,17 +30,17 @@ export default function NodeSidebar({ node, onClose, clusterName, clusterSize, n
           aria-hidden
         />
         <span className="flex-1 truncate font-semibold text-sm">
-          {clusterName ?? `Cluster ${node.cluster}`}
+          {clusterName ?? t('graphDetail.clusterLabel', { n: node.cluster })}
           {clusterSize != null && (
             <span className="ml-1 font-normal text-muted-foreground text-xs">
-              — {clusterSize} nodes
+              — {t('graph.nodes', { n: clusterSize })}
             </span>
           )}
         </span>
         <button
           onClick={onClose}
           className="flex-shrink-0 text-muted-foreground hover:text-foreground transition-colors rounded p-0.5 text-base leading-none"
-          aria-label="Close"
+          aria-label={t('common.close')}
         >
           ✕
         </button>
@@ -48,14 +50,14 @@ export default function NodeSidebar({ node, onClose, clusterName, clusterSize, n
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
         {/* Semantic info chip */}
         <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-          Connected via semantic similarity (K-nearest neighbors)
+          {t('graphDetail.connectedVia')}
         </div>
 
         {/* Nearest neighbors */}
         {neighbors && neighbors.length > 0 && (
           <div>
             <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
-              Nearest neighbors ({neighbors.length})
+              {t('graphDetail.nearestNeighbors', { n: neighbors.length })}
             </div>
             <ul className="space-y-1">
               {neighbors.map(nb => (
@@ -89,14 +91,14 @@ export default function NodeSidebar({ node, onClose, clusterName, clusterSize, n
 
         {/* Degree badge */}
         <div>
-          <Badge variant="outline">degree-radius {node.radius}</Badge>
+          <Badge variant="outline">{t('graphDetail.degreeRadius', { r: node.radius })}</Badge>
         </div>
 
         {/* Highlight by field chips */}
         {onHighlight && (
           <div>
             <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-              Highlight by field
+              {t('graphDetail.highlightByField')}
             </div>
             <div className="flex flex-wrap gap-2">
               {Object.entries(node.props)
@@ -132,7 +134,7 @@ export default function NodeSidebar({ node, onClose, clusterName, clusterSize, n
             className="text-xs text-muted-foreground hover:text-foreground transition-colors"
             onClick={() => setUuidExpanded(v => !v)}
           >
-            {uuidExpanded ? 'Hide ID' : 'Show ID'}
+            {uuidExpanded ? t('graphDetail.hideId') : t('graphDetail.showId')}
           </button>
           {uuidExpanded && (
             <div className="mt-1 font-mono text-xs text-muted-foreground break-all">{node.id}</div>

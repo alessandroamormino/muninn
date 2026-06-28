@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import EntityDropdown from '@/components/EntityDropdown'
 import SearchBar from './search/SearchBar'
 import FilterBar from './search/FilterBar'
@@ -12,6 +13,7 @@ import { Button } from '@/components/ui/button'
 const PAGE_SIZE = 10
 
 export default function SearchPage() {
+  const { t } = useTranslation()
   const [collection, setCollection] = useState<string | null>(null)
   const [q, setQ] = useState<string>('')
   const [filter, setFilter] = useState<string>('')
@@ -56,25 +58,27 @@ export default function SearchPage() {
     // Phase 26 — entity unloaded: surface the backend detail (it tells the user to reload it).
     if (/HTTP 409/i.test(e.message)) {
       const match = e.message.match(/HTTP 409[^"]*?"detail":\s*"([^"]+)"/)
-      return match ? match[1] : 'This entity is unloaded — reactivate it from Settings → Entities to search it.'
+      return match ? match[1] : t('search.errUnloaded')
     }
-    if (/HTTP 404/i.test(e.message)) return 'No config found for this collection.'
-    return 'Could not reach the search service. Check that the orchestrator container is running.'
+    if (/HTTP 404/i.test(e.message)) return t('search.errNoConfig')
+    return t('search.errUnreachable')
   })()
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Search</h1>
-      <EntityDropdown activeOnly value={collection} onChange={(c) => { setCollection(c); setPage(0) }} />
+      <h1 className="text-xl font-semibold">{t('search.title')}</h1>
+      <EntityDropdown activeOnly value={collection} onChange={(c) => { setCollection(c); setFilter(''); setMinScore(null); setPage(0) }} />
       <SearchBar
-        placeholder={collection ? `Search across ${collection}...` : 'Select a collection first'}
+        placeholder={collection ? t('search.placeholder', { collection }) : t('search.selectFirst')}
         onSubmit={setQ}
         disabled={!collection}
         collection={collection}
       />
       <FilterBar
+        key={collection}
         filter={filter}
         minScore={minScore}
+        fields={entityInfo?.metadata_fields ?? []}
         onChange={({ filter: f, minScore: m }) => { setFilter(f); setMinScore(m) }}
       />
 
@@ -82,14 +86,14 @@ export default function SearchPage() {
         <SearchModeSelector
           value={searchMode}
           onChange={(m) => { setSearchMode(m); setPage(0) }}
-          disabled={search.isPending}
+          disabled={search.isFetching}
           configuredMode={configuredMode}
         />
       )}
 
       {!q && (
         <div className="text-sm text-muted-foreground py-8 text-center">
-          Type a query and press Search.
+          {t('search.typePrompt')}
         </div>
       )}
 
@@ -109,16 +113,16 @@ export default function SearchPage() {
         <>
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>
-              {totalResults} results in {search.data.took_ms} ms
-              {totalPages > 1 && ` — page ${page + 1} of ${totalPages}`}
+              {t('search.results', { n: totalResults, ms: search.data.took_ms })}
+              {totalPages > 1 && ` — ${t('search.pageOf', { page: page + 1, total: totalPages })}`}
             </span>
           </div>
 
           {totalResults === 0 ? (
             <div className="text-center py-8">
-              <h3 className="text-base font-semibold mb-1">No results found</h3>
+              <h3 className="text-base font-semibold mb-1">{t('search.noResults')}</h3>
               <p className="text-sm text-muted-foreground">
-                Try a different query or lower the minimum score threshold.
+                {t('search.noResultsHint')}
               </p>
             </div>
           ) : (
@@ -137,7 +141,7 @@ export default function SearchPage() {
                     onClick={() => setPage((p) => Math.max(0, p - 1))}
                     disabled={page === 0}
                   >
-                    ← Prev
+                    {t('search.prev')}
                   </Button>
                   <span className="text-xs text-muted-foreground px-2">
                     {page + 1} / {totalPages}
@@ -148,7 +152,7 @@ export default function SearchPage() {
                     onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                     disabled={page >= totalPages - 1}
                   >
-                    Next →
+                    {t('search.next')}
                   </Button>
                 </div>
               )}

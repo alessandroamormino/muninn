@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import type { SearchResult } from '@/api/search'
@@ -21,6 +22,7 @@ function formatValue(v: unknown): string {
 }
 
 export default function ResultCard({ result }: { result: SearchResult }) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const { _score, ...props } = result
 
@@ -107,7 +109,7 @@ export default function ResultCard({ result }: { result: SearchResult }) {
             <button
               onClick={() => setOpen(false)}
               className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors text-lg leading-none"
-              aria-label="Close"
+              aria-label={t('common.close')}
             >
               ✕
             </button>

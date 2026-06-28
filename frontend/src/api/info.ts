@@ -13,6 +13,7 @@ export interface InfoResponse {
   vector_store_engine: string
   search_mode: string
   max_limit: number | null
+  metadata_fields: string[]
 }
 
 export function useInfo() {

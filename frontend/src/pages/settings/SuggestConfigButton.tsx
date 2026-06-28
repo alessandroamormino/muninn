@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button'
+import { useTranslation } from 'react-i18next'
 import { useSuggestConfigFromFields } from '@/api/config'
 import type { SuggestFieldsResponse } from '@/api/config'
 import { toast } from 'sonner'
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export default function SuggestConfigButton({ fields, onResult, disabled }: Props) {
+  const { t } = useTranslation()
   const suggest = useSuggestConfigFromFields()
 
   return (
@@ -21,11 +23,11 @@ export default function SuggestConfigButton({ fields, onResult, disabled }: Prop
         suggest.mutate(fields, {
           onSuccess: (data) => {
             onResult(data.suggested_config)
-            toast.success('Suggerimenti applicati.')
+            toast.success(t('suggest.applied'))
           },
           onError: (e: Error) => {
             if (e.message.toLowerCase().includes('llm')) {
-              toast.error('LLM non raggiungibile — suggerisci manualmente i campi.')
+              toast.error(t('suggest.llmError'))
             } else {
               toast.error(e.message)
             }
@@ -33,7 +35,7 @@ export default function SuggestConfigButton({ fields, onResult, disabled }: Prop
         })
       }}
     >
-      {suggest.isPending ? 'Analyzing...' : 'Suggest fields'}
+      {suggest.isPending ? t('suggest.analyzing') : t('suggest.suggest')}
     </Button>
   )
 }

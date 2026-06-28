@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useState, useMemo, useEffect, useRef } from 'react'
 import type { GraphResponse, GraphNode } from '@/api/graph'
 import { useVisNetwork } from './useVisNetwork'
@@ -47,6 +48,7 @@ interface Props {
 }
 
 export default function GraphCanvas({ data, resetZoomRef }: Props) {
+  const { t } = useTranslation()
   const [searchTerm, setSearchTerm] = useState('')
   const containerRef = useRef<HTMLDivElement>(null)
   const [selected, setSelected] = useState<GraphNode | null>(null)
@@ -173,14 +175,14 @@ export default function GraphCanvas({ data, resetZoomRef }: Props) {
       {/* Filter bar — above the graph */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-card flex-shrink-0 overflow-x-auto">
         <Input
-          placeholder="Search records..."
+          placeholder={t('graphDetail.searchRecords')}
           value={searchTerm}
           onChange={e => setSearchTerm(e.target.value)}
           className="h-6 text-xs w-40 flex-shrink-0"
         />
         {filterFields.length > 0 && (
           <>
-          <span className="text-xs text-muted-foreground flex-shrink-0">Filters:</span>
+          <span className="text-xs text-muted-foreground flex-shrink-0">{t('graphDetail.filtersLabel')}</span>
           {filterFields.map(({ field, values }) => (
             <select
               key={field}

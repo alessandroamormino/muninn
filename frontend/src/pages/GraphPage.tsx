@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import EntityDropdown from '@/components/EntityDropdown'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -7,6 +8,7 @@ import { useGraph } from '@/api/graph'
 import { useEntityInfo } from '@/api/config'
 
 export default function GraphPage() {
+  const { t } = useTranslation()
   const [collection, setCollection] = useState<string | null>(null)
   const { data: graphInfo } = useEntityInfo(collection)
   const isFtsMode = collection != null && graphInfo?.search_mode === 'fts'
@@ -22,19 +24,19 @@ export default function GraphPage() {
     const e = graph.error as Error | undefined
     if (!e) return null
     if (isTooFew) return null  // shown as empty state, not error
-    return 'Failed to generate the graph. The collection may be empty or the server encountered an error.'
+    return t('graph.errGenerate')
   })()
 
   return (
     <div className="h-[calc(100vh-5.5rem)] flex flex-col gap-3">
       <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold">Knowledge Graph</h1>
+        <h1 className="text-xl font-semibold">{t('graph.title')}</h1>
         <div className="flex-1" />
         {graph.data && (
           <>
-            <Badge variant="outline">{graph.data.nodes.length} nodes</Badge>
+            <Badge variant="outline">{t('graph.nodes', { n: graph.data.nodes.length })}</Badge>
             <Button size="sm" variant="outline" onClick={() => resetZoomRef.current?.()}>
-              Reset view
+              {t('graph.resetView')}
             </Button>
           </>
         )}
@@ -43,24 +45,22 @@ export default function GraphPage() {
           onClick={() => graph.refetch()}
           disabled={!collection || graph.isFetching || isFtsMode}
         >
-          {graph.isFetching ? 'Computing...' : 'Load Graph'}
+          {graph.isFetching ? t('graph.computing') : t('graph.load')}
         </Button>
       </div>
 
       <div className="flex-1 border rounded-md overflow-hidden relative bg-muted/30">
         {!collection && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
-            Select an entity, then click Load Graph.
+            {t('graph.selectPrompt')}
           </div>
         )}
 
         {collection && isFtsMode && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-6">
-            <h3 className="text-base font-semibold mb-1">Knowledge Graph non disponibile</h3>
+            <h3 className="text-base font-semibold mb-1">{t('graph.ftsTitle')}</h3>
             <p className="text-sm text-muted-foreground max-w-sm">
-              Il Knowledge Graph richiede vettori semantici per calcolare la proiezione UMAP.
-              Con <code className="font-mono text-xs bg-muted px-1 rounded">search_mode: fts</code> non vengono
-              calcolati vettori. Cambia modalità a <strong>hybrid</strong> o <strong>vector</strong> per abilitare il grafo.
+              {t('graph.ftsHint')}
             </p>
           </div>
         )}
@@ -69,16 +69,16 @@ export default function GraphPage() {
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
             <div className="h-8 w-8 border-2 border-primary border-t-transparent rounded-full animate-spin" aria-hidden />
             <p className="text-sm text-muted-foreground">
-              Computing UMAP projection... (this may take a few seconds)
+              {t('graph.computingUmap')}
             </p>
           </div>
         )}
 
         {collection && isTooFew && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-6">
-            <h3 className="text-base font-semibold mb-1">No data to visualize</h3>
+            <h3 className="text-base font-semibold mb-1">{t('graph.tooFewTitle')}</h3>
             <p className="text-sm text-muted-foreground">
-              Run a full sync for this collection first, then load the graph.
+              {t('graph.tooFewHint')}
             </p>
           </div>
         )}

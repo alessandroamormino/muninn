@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 // Phase 27 — Resource Monitoring Dashboard.
@@ -11,6 +12,7 @@ interface Props {
 }
 
 export function StatusDot({ status, health }: Props) {
+  const { t } = useTranslation()
   // running + unhealthy — steady-state warning, solid amber (no animation)
   if (status === 'running' && health === 'unhealthy') {
     return (
@@ -18,7 +20,7 @@ export function StatusDot({ status, health }: Props) {
         <TooltipTrigger asChild>
           <span className="h-2 w-2 rounded-full bg-amber-500 shrink-0 inline-flex" />
         </TooltipTrigger>
-        <TooltipContent side="top">Unhealthy</TooltipContent>
+        <TooltipContent side="top">{t('status.unhealthy')}</TooltipContent>
       </Tooltip>
     )
   }
@@ -33,7 +35,7 @@ export function StatusDot({ status, health }: Props) {
             <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500" />
           </span>
         </TooltipTrigger>
-        <TooltipContent side="top">Starting…</TooltipContent>
+        <TooltipContent side="top">{t('status.starting')}</TooltipContent>
       </Tooltip>
     )
   }
@@ -45,7 +47,7 @@ export function StatusDot({ status, health }: Props) {
         <TooltipTrigger asChild>
           <span className="h-2 w-2 rounded-full bg-amber-500 shrink-0 inline-flex animate-pulse" />
         </TooltipTrigger>
-        <TooltipContent side="top">Restarting</TooltipContent>
+        <TooltipContent side="top">{t('status.restarting')}</TooltipContent>
       </Tooltip>
     )
   }
@@ -57,7 +59,7 @@ export function StatusDot({ status, health }: Props) {
         <TooltipTrigger asChild>
           <span className="h-2 w-2 rounded-full bg-red-500 shrink-0 inline-flex" />
         </TooltipTrigger>
-        <TooltipContent side="top">{status === 'exited' ? 'Exited' : 'Dead'}</TooltipContent>
+        <TooltipContent side="top">{status === 'exited' ? t('status.exited') : t('status.dead')}</TooltipContent>
       </Tooltip>
     )
   }
@@ -68,7 +70,7 @@ export function StatusDot({ status, health }: Props) {
       <TooltipTrigger asChild>
         <span className="h-2 w-2 rounded-full bg-emerald-500 shrink-0 inline-flex" />
       </TooltipTrigger>
-      <TooltipContent side="top">Running</TooltipContent>
+      <TooltipContent side="top">{t('status.running')}</TooltipContent>
     </Tooltip>
   )
 }

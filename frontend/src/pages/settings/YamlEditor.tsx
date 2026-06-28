@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { useGetConfig, useSaveConfig } from '@/api/config'
 import SuggestConfigButton from './SuggestConfigButton'
@@ -157,6 +158,7 @@ function UnifiedDiff({ oldYaml, newYaml }: { oldYaml: string; newYaml: string })
 // ─── YamlEditor ──────────────────────────────────────────────────────────────
 
 export default function YamlEditor({ collection }: { collection: string }) {
+  const { t } = useTranslation()
   const { data: configData, refetch, isLoading } = useGetConfig(collection)
   const save = useSaveConfig(collection)
 
@@ -189,16 +191,16 @@ export default function YamlEditor({ collection }: { collection: string }) {
       await save.mutateAsync(yamlContent)
       setSavedYaml(yamlContent)
       setSuggestedYaml(null)
-      toast.success('Config salvata.')
+      toast.success(t('yaml.saved'))
     } catch (e) {
       const msg = (e as Error).message
       setServerError(msg)
-      toast.error('Salvataggio fallito.')
+      toast.error(t('yaml.saveFailed'))
     }
   }
 
   const handleReload = async () => {
-    if (isDirty && !window.confirm('Hai modifiche non salvate. Ricaricare dal disco?')) return
+    if (isDirty && !window.confirm(t('yaml.reloadConfirm'))) return
     const result = await refetch()
     const freshYaml = result.data?.yaml ?? configData?.yaml ?? ''
     setYamlContent(freshYaml)
@@ -211,7 +213,7 @@ export default function YamlEditor({ collection }: { collection: string }) {
   const handleSuggestResult = (suggested: SuggestFieldsResponse['suggested_config']) => {
     const patched = applyFieldSuggestions(yamlContent, suggested)
     if (patched === yamlContent) {
-      toast.info('Nessuna modifica — i campi suggeriti coincidono con quelli attuali.')
+      toast.info(t('yaml.noChange'))
       return
     }
     setSuggestedYaml(patched)
@@ -222,28 +224,28 @@ export default function YamlEditor({ collection }: { collection: string }) {
     if (suggestedYaml === null) return
     setYamlContent(suggestedYaml)
     setSuggestedYaml(null)
-    toast.info('Suggerimenti applicati — salva per rendere le modifiche permanenti.')
+    toast.info(t('yaml.applied'))
   }
 
   const handleDismiss = () => setSuggestedYaml(null)
 
   if (isLoading && !configData) {
-    return <div className="text-muted-foreground text-sm">Loading config…</div>
+    return <div className="text-muted-foreground text-sm">{t('yaml.loading')}</div>
   }
 
   return (
     <div className="space-y-3 mt-4">
       {/* Heading + badges */}
       <div className="flex items-center gap-2 flex-wrap">
-        <h3 className="text-base font-semibold">Config — {collection}</h3>
+        <h3 className="text-base font-semibold">{t('yaml.heading', { collection })}</h3>
         {isDirty && !suggestedYaml && (
           <span className="inline-flex items-center rounded-md px-2 py-0.5 text-xs bg-amber-100 text-amber-700">
-            Unsaved changes
+            {t('yaml.unsaved')}
           </span>
         )}
         {suggestedYaml && (
           <span className="inline-flex items-center rounded-md px-2 py-0.5 text-xs bg-blue-100 text-blue-700">
-            Revisione suggerimenti
+            {t('yaml.reviewBadge')}
           </span>
         )}
       </div>
@@ -252,18 +254,15 @@ export default function YamlEditor({ collection }: { collection: string }) {
         // ── Diff review mode ──────────────────────────────────────────────────
         <>
           <p className="text-xs text-muted-foreground">
-            Righe in <span className="text-red-600 font-medium">rosso</span> verranno rimosse,
-            righe in <span className="text-green-600 font-medium">verde</span> aggiunte.
-            Clicca <strong>Applica</strong> per portare le modifiche nell'editor (senza salvare),
-            oppure <strong>Annulla</strong> per scartare.
+            {t('yaml.diffHint')}
           </p>
 
           <UnifiedDiff oldYaml={yamlContent} newYaml={suggestedYaml} />
 
           <div className="flex gap-2">
-            <Button onClick={handleAccept}>Applica suggerimenti</Button>
+            <Button onClick={handleAccept}>{t('yaml.applySuggestions')}</Button>
             <Button variant="outline" onClick={handleDismiss}>
-              Annulla
+              {t('common.cancel')}
             </Button>
           </div>
         </>
@@ -288,10 +287,10 @@ export default function YamlEditor({ collection }: { collection: string }) {
 
           <div className="flex gap-2">
             <Button onClick={handleSave} disabled={!isDirty || save.isPending}>
-              {save.isPending ? 'Saving…' : 'Save changes'}
+              {save.isPending ? t('yaml.saving') : t('yaml.saveChanges')}
             </Button>
             <Button variant="outline" onClick={handleReload} disabled={save.isPending}>
-              Reload from disk
+              {t('yaml.reloadDisk')}
             </Button>
           </div>
 

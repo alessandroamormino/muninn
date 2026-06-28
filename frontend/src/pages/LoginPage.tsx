@@ -18,13 +18,16 @@
  */
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router'
+import { useTranslation } from 'react-i18next'
 import { Loader2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
+import LanguageToggle from '@/components/LanguageToggle'
 
 type Step = 'credentials' | 'totp'
 
 export default function LoginPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { setToken } = useAuth()
 
   const [step, setStep] = useState<Step>('credentials')
@@ -62,7 +65,7 @@ export default function LoginPage() {
       })
       const data = await res.json()
       if (!res.ok) {
-        setError('Credenziali non valide. Riprova.')
+        setError(t('login.errCreds'))
         return
       }
       if (data.status === 'totp_required') {
@@ -73,7 +76,7 @@ export default function LoginPage() {
       setToken(data.access_token)
       navigate('/search', { replace: true })
     } catch {
-      setError('Errore di rete. Verifica la connessione.')
+      setError(t('login.errNetwork'))
     } finally {
       setLoading(false)
     }
@@ -93,31 +96,31 @@ export default function LoginPage() {
       if (!res.ok) {
         const detail: string = data.detail ?? ''
         if (detail.includes('Sessione scaduta')) {
-          setError('Sessione scaduta. Rieffettua il login.')
+          setError(t('login.errSessionExpired'))
           setStep('credentials')
           setTmpToken('')
           setTotpCode('')
         } else {
-          setError('Codice non valido o scaduto. Riprova.')
+          setError(t('login.errTotpInvalid'))
         }
         return
       }
       setToken(data.access_token)
       navigate('/search', { replace: true })
     } catch {
-      setError('Errore di rete. Verifica la connessione.')
+      setError(t('login.errNetwork'))
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background">
       <div className="w-[400px] max-w-[calc(100vw-2rem)] p-6 rounded-lg border bg-card shadow-sm">
         {/* Header */}
         <div className="mb-6 text-center">
           <p className="text-sm text-muted-foreground">smart-search</p>
-          <h1 className="text-2xl font-semibold mt-1">Sign in</h1>
+          <h1 className="text-2xl font-semibold mt-1">{t('login.title')}</h1>
         </div>
 
         {/* Step 1: credentials */}
@@ -125,7 +128,7 @@ export default function LoginPage() {
           <div className="space-y-4">
             <div>
               <label htmlFor="username" className="block text-sm font-medium mb-1">
-                Username
+                {t('login.username')}
               </label>
               <input
                 id="username"
@@ -140,7 +143,7 @@ export default function LoginPage() {
             </div>
             <div>
               <label htmlFor="password" className="block text-sm font-medium mb-1">
-                Password
+                {t('login.password')}
               </label>
               <input
                 id="password"
@@ -161,7 +164,7 @@ export default function LoginPage() {
               className="w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              Sign in
+              {t('login.signIn')}
             </button>
           </div>
         </form>
@@ -171,11 +174,11 @@ export default function LoginPage() {
           <form onSubmit={handleTotpSubmit}>
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground text-center">
-                Inserisci il codice dell&apos;app di autenticazione
+                {t('login.totpHint')}
               </p>
               <div>
                 <label htmlFor="totp-code" className="block text-sm font-medium mb-1">
-                  Codice TOTP
+                  {t('login.totpLabel')}
                 </label>
                 <input
                   id="totp-code"
@@ -198,19 +201,20 @@ export default function LoginPage() {
                 className="w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-                Confirm
+                {t('login.confirm')}
               </button>
               <button
                 type="button"
                 onClick={() => { setStep('credentials'); setError(''); setTotpCode(''); setTmpToken('') }}
                 className="w-full text-sm text-muted-foreground underline underline-offset-2"
               >
-                Torna al login
+                {t('login.backToLogin')}
               </button>
             </div>
           </form>
         )}
       </div>
+      <LanguageToggle />
     </div>
   )
 }

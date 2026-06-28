@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import {
@@ -28,6 +29,7 @@ type Confirm =
   | null
 
 export default function BackupTab({ collection }: { collection: string }) {
+  const { t } = useTranslation()
   const trigger = useTriggerBackup()
   const restore = useRestoreBackup()
   const del = useDeleteBackup()
@@ -66,20 +68,19 @@ export default function BackupTab({ collection }: { collection: string }) {
     <div className="mt-4 space-y-6">
       <div>
         <p className="text-sm text-muted-foreground">
-          Off-host backup of <code className="font-mono">{collection}</code> (Qdrant snapshot
-          + state set) to the configured S3 bucket. Restore overwrites the live collection.
+          {t('backup.desc', { collection })}
         </p>
         <div className="mt-4">
           <Button
             disabled={busy}
             onClick={() =>
               trigger.mutate(collection, {
-                onSuccess: () => toast.success('Backup started in background.'),
+                onSuccess: () => toast.success(t('backup.started')),
                 onError: (e: Error) => toast.error(e.message),
               })
             }
           >
-            {trigger.isPending ? 'Starting…' : 'Create backup'}
+            {trigger.isPending ? t('backup.starting') : t('backup.create')}
           </Button>
         </div>
       </div>
@@ -104,17 +105,17 @@ export default function BackupTab({ collection }: { collection: string }) {
       )}
 
       <div>
-        <h3 className="text-sm font-semibold mb-2">Backups</h3>
+        <h3 className="text-sm font-semibold mb-2">{t('backup.title')}</h3>
         {rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No backups yet for this collection.</p>
+          <p className="text-sm text-muted-foreground">{t('backup.none')}</p>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Created</TableHead>
-                <TableHead>Size</TableHead>
-                <TableHead>Snapshot</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead>{t('backup.colCreated')}</TableHead>
+                <TableHead>{t('backup.colSize')}</TableHead>
+                <TableHead>{t('backup.colSnapshot')}</TableHead>
+                <TableHead className="text-right">{t('backup.colActions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -134,7 +135,7 @@ export default function BackupTab({ collection }: { collection: string }) {
                       disabled={busy}
                       onClick={() => setConfirm({ kind: 'restore', bundle: b })}
                     >
-                      Restore
+                      {t('backup.restore')}
                     </Button>
                     <Button
                       size="sm"
@@ -142,7 +143,7 @@ export default function BackupTab({ collection }: { collection: string }) {
                       disabled={busy}
                       onClick={() => setConfirm({ kind: 'delete', bundle: b })}
                     >
-                      Delete
+                      {t('common.delete')}
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -158,15 +159,13 @@ export default function BackupTab({ collection }: { collection: string }) {
           {confirm?.kind === 'restore' && (
             <>
               <DialogHeader>
-                <DialogTitle>Restore this backup?</DialogTitle>
+                <DialogTitle>{t('backup.restoreTitle')}</DialogTitle>
                 <DialogDescription>
-                  This <strong>overwrites the live collection</strong>{' '}
-                  <code className="font-mono">{collection}</code> with the snapshot from{' '}
-                  {new Date(confirm.bundle.created_at).toLocaleString()}. This cannot be undone.
+                  {t('backup.restoreDesc', { collection, date: new Date(confirm.bundle.created_at).toLocaleString() })}
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setConfirm(null)}>Cancel</Button>
+                <Button variant="outline" onClick={() => setConfirm(null)}>{t('common.cancel')}</Button>
                 <Button
                   onClick={() => {
                     const bundle = confirm.bundle
@@ -174,13 +173,13 @@ export default function BackupTab({ collection }: { collection: string }) {
                     restore.mutate(
                       { name: collection, bundleId: bundle.bundle_id },
                       {
-                        onSuccess: () => toast.success('Restore started in background.'),
+                        onSuccess: () => toast.success(t('backup.restoreStarted')),
                         onError: (e: Error) => toast.error(e.message),
                       },
                     )
                   }}
                 >
-                  Restore (overwrite)
+                  {t('backup.restoreConfirm')}
                 </Button>
               </DialogFooter>
             </>
@@ -188,25 +187,25 @@ export default function BackupTab({ collection }: { collection: string }) {
           {confirm?.kind === 'delete' && (
             <>
               <DialogHeader>
-                <DialogTitle>Delete this backup?</DialogTitle>
+                <DialogTitle>{t('backup.deleteTitle')}</DialogTitle>
                 <DialogDescription>
-                  Permanently removes the bundle from the bucket and the catalog. This cannot be undone.
+                  {t('backup.deleteDesc')}
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setConfirm(null)}>Cancel</Button>
+                <Button variant="outline" onClick={() => setConfirm(null)}>{t('common.cancel')}</Button>
                 <Button
                   variant="destructive"
                   onClick={() => {
                     const bundle = confirm.bundle
                     setConfirm(null)
                     del.mutate(bundle.bundle_id, {
-                      onSuccess: () => toast.success('Backup deleted.'),
+                      onSuccess: () => toast.success(t('backup.deleted')),
                       onError: (e: Error) => toast.error(e.message),
                     })
                   }}
                 >
-                  Delete
+                  {t('common.delete')}
                 </Button>
               </DialogFooter>
             </>

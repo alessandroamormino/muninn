@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useCollections } from '@/api/collections'
 import EntityList from './settings/EntityList'
 import UploadWizard from './settings/UploadWizard'
@@ -18,13 +19,14 @@ type Mode =
   | { kind: 'new'; sourceType: 'csv' | 'rest_api' | 'mysql' }
 
 export default function EntitiesPage() {
+  const { t } = useTranslation()
   const { data } = useCollections()
   const [mode, setMode] = useState<Mode>({ kind: 'idle' })
 
   return (
     <div className="flex gap-6 h-full">
       <Card className="w-80 p-4 flex flex-col gap-3">
-        <h2 className="text-base font-semibold">Entities</h2>
+        <h2 className="text-base font-semibold">{t('entities.title')}</h2>
         <EntityList
           collections={data?.collections ?? []}
           selected={mode.kind === 'view' ? mode.collection : null}
@@ -37,7 +39,7 @@ export default function EntitiesPage() {
       <Card className="flex-1 p-6 overflow-y-auto">
         {mode.kind === 'idle' && (
           <div className="text-sm text-muted-foreground">
-            Select an entity from the left panel, or add a new one.
+            {t('entities.idle')}
           </div>
         )}
         {mode.kind === 'new' && mode.sourceType === 'csv' && (
@@ -55,11 +57,11 @@ export default function EntitiesPage() {
         {mode.kind === 'view' && (
           <Tabs defaultValue="config">
             <TabsList>
-              <TabsTrigger value="config">Config</TabsTrigger>
-              <TabsTrigger value="info">Info</TabsTrigger>
-              <TabsTrigger value="sync">Sync</TabsTrigger>
-              <TabsTrigger value="logs">Logs</TabsTrigger>
-              <TabsTrigger value="backup">Backup</TabsTrigger>
+              <TabsTrigger value="config">{t('entities.tab.config')}</TabsTrigger>
+              <TabsTrigger value="info">{t('entities.tab.info')}</TabsTrigger>
+              <TabsTrigger value="sync">{t('entities.tab.sync')}</TabsTrigger>
+              <TabsTrigger value="logs">{t('entities.tab.logs')}</TabsTrigger>
+              <TabsTrigger value="backup">{t('entities.tab.backup')}</TabsTrigger>
             </TabsList>
             <TabsContent value="config">
               <YamlEditor collection={mode.collection} />
