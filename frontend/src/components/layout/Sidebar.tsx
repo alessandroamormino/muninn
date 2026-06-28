@@ -15,7 +15,10 @@ export default function Sidebar() {
   const { t } = useTranslation()
   return (
     <aside className="w-60 border-r bg-card flex flex-col">
-      <div className="h-14 border-b flex items-center px-4 text-base font-semibold">{t('app.title')}</div>
+      <div className="h-14 border-b flex items-center gap-2 px-4 text-base font-semibold">
+        <img src="/muninn.svg" alt="" className="h-7 w-7" />
+        {t('app.title')}
+      </div>
       <nav className="flex flex-col p-2 gap-1">
         {NAV.map((n) => (
           <NavLink
