@@ -390,12 +390,14 @@ vector_store:
 
 **`search_mode`:**
 
-| Mode | What it does | Best for |
-|---|---|---|
-| `hybrid` (default) | BM25 keyword + dense vector, combined | Most use cases — finds names, codes AND concepts |
-| `vector` | Pure semantic/dense vector search | Conceptual queries, language-independent |
-| `bm25` | Pure keyword (BM25) | Exact codes, SKUs, identifiers |
-| `fts` | Full-text search via Qdrant's text index | Exact phrase search with stemming (Qdrant only) |
+| Mode | What it does | Best for | Needs Ollama? |
+|---|---|---|---|
+| `hybrid` (default) | BM25 keyword + dense vector, fused with RRF | Most use cases — finds names, codes AND concepts | yes |
+| `vector` | Pure semantic dense kNN | Conceptual queries, language-independent, m/f & synonyms | yes |
+| `bm25` | True BM25 ranking (IDF/TF) over the sparse index | Exact codes, SKUs, identifiers — ranked by relevance | no |
+| `fts` | Boolean full-text: term presence + Snowball stemming + fuzzy + exact-phrase bonus | Recall-first coverage and exact-phrase matching (Qdrant only) | no |
+
+> Full deep-dive — what each mode covers (typos, plural, gender, synonyms, phonetics), how to add custom dictionaries, and worked examples — lives in **[search.md](search.md)**.
 
 **`text_fields`** accept per-field boost weights (optional):
 

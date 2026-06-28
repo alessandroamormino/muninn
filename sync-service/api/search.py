@@ -185,6 +185,7 @@ async def search(
     ),
     search_mode_override: Optional[str] = Query(
         default=None,
+        alias="search_mode",
         description="Override search_mode for this request (e.g. 'fts', 'bm25', 'vector', 'hybrid'). If omitted uses entity config.",
     ),
     match_mode_override: Annotated[Optional[Literal["and", "or"]], Query(
@@ -214,6 +215,20 @@ async def search(
     # --- Effective collection name (used for cache keying and history logging) --
     effective_collection = collection if collection is not None else cfg.vector_store.collection
 
+    # --- Effective search mode (resolved here so the cache key can include it) --
+    # The 4 modes return different results for the same query — the cache MUST key on
+    # mode, else a query cached in (say) bm25 is wrongly served for fts/vector/hybrid.
+    effective_mode = (
+        search_mode_override
+        if search_mode_override is not None
+        else getattr(cfg.vector_store, "search_mode", "hybrid")
+    )
+    # match_mode only changes fts/bm25 results — fold it in too, empty elsewhere.
+    _cache_match_mode = (
+        match_mode_override or getattr(getattr(cfg.vector_store, "fts", None), "match_mode", "and")
+    ) if effective_mode in ("fts", "bm25") else ""
+    _cache_filter_key = f"{filter or ''}|{effective_mode}|{_cache_match_mode}"
+
     # --- Gating: 409 if this entity is unloaded (D-10) -------------------------
     _assert_entity_active(getattr(request.app.state, "entity_state_store", None), effective_collection)
 
@@ -223,7 +238,7 @@ async def search(
 
     if cache_store is not None:
         try:
-            cached = cache_store.get(q, effective_collection, filter, min_score)
+            cached = cache_store.get(q, effective_collection, _cache_filter_key, min_score)
             if cached is not None:
                 cached["cached"] = True
                 # --- History log on cache-HIT path (SC-13-01) ----------------------
@@ -325,11 +340,7 @@ async def search(
 
     # --- Vector store search (engine-agnostic via BaseVectorStore.search()) ----
     # Determine effective_mode first so embedding can be skipped for fts/bm25.
-    effective_mode = (
-        search_mode_override
-        if search_mode_override is not None
-        else getattr(cfg.vector_store, "search_mode", "hybrid")
-    )
+    # effective_mode resolved earlier (needed for the cache key).
     # Per-entity collections may use a different embedding model than the global config.
     # Build the adapter from the resolved cfg so query dims match the indexed vectors.
     # Skip entirely for fts/bm25 modes — no dense vector needed (Ollama not required).
@@ -346,12 +357,17 @@ async def search(
         # Synonym expansion for Qdrant (D-13): applied at query-time to all Qdrant modes.
         # For Weaviate, synonym expansion is not needed — built-in BM25 handles it.
         engine = os.getenv("VECTOR_STORE_ENGINE", "weaviate")
+        # Synonym/OMW expansion is OR-semantic (the variants are alternatives, not all
+        # required). In fts/bm25 AND mode that would require ALL synonyms to coexist in a
+        # document → 0 results. Track it and force OR below, same as the fuzzy guard.
+        _or_semantic_expanded = False
         expand_q = embed_q
         if engine == "qdrant" and effective_collection is not None:
             synonym_groups = _load_synonyms(_CONFIG_ROOT, effective_collection)
             if synonym_groups:
                 expand_q = _expand_query(embed_q, synonym_groups)
                 if expand_q != embed_q:
+                    _or_semantic_expanded = True
                     logger.info(
                         "Synonym expansion: %r → %r (collection=%r)",
                         embed_q, expand_q, effective_collection,
@@ -370,6 +386,7 @@ async def search(
                 omw_new = [w for w in omw_extras if w not in existing_tokens]
                 if omw_new:
                     expand_q = expand_q + " " + " ".join(omw_new)
+                    _or_semantic_expanded = True
                     logger.info("OMW expansion: added %d lemmas", len(omw_new))
             except Exception as exc:  # noqa: BLE001
                 logger.warning("OMW expansion failed: %s", exc)
@@ -437,7 +454,7 @@ async def search(
             # When fuzzy expansion added variants, force OR so the pre-filter admits any
             # variant. Without this, MatchText(AND) would require ALL expanded tokens to
             # coexist in a single document, defeating fuzzy recall entirely.
-            match_mode_override="or" if _fuzzy_expanded else match_mode_override,
+            match_mode_override="or" if (_fuzzy_expanded or _or_semantic_expanded) else match_mode_override,
         )
     except HTTPException:
         raise
@@ -471,7 +488,7 @@ async def search(
     if cache_store is not None:
         try:
             ttl = getattr(cfg.api, "cache_ttl_seconds", 300)
-            cache_store.set(q, effective_collection, filter, min_score, response_body, ttl_seconds=ttl)
+            cache_store.set(q, effective_collection, _cache_filter_key, min_score, response_body, ttl_seconds=ttl)
         except Exception as _cs_exc:  # noqa: BLE001
             logger.warning("cache store error: %s", _cs_exc)
 

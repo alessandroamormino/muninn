@@ -113,6 +113,25 @@ curl http://localhost:8000/collections
 
 ---
 
+### `POST /collections/{name}/cache`
+
+Purge all cached search results for one entity. **Admin only** (`require_admin` → 403 otherwise).
+
+Use it after editing an entity's `config.yaml` / `synonyms.yaml` or its data: the exact-match
+search cache (TTL 300s) is not auto-invalidated on file edits, so without a purge a stale
+result can be served for up to the TTL. Fast synchronous operation (no background task).
+
+```bash
+curl -X POST http://localhost:8000/collections/Employees/cache \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Response:** `{"status": "purged", "collection": "Employees"}` — or `{"status": "noop", "detail": "cache disabled"}` when no cache is configured. Invalid name → `422`.
+
+> In the UI: **Settings → Entities**, select an entity, **"Svuota cache"** in its info panel.
+
+---
+
 ## Observability
 
 ### `GET /health`

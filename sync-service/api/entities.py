@@ -164,6 +164,28 @@ async def load_collection(
     return {"status": "started"}
 
 
+@router.post("/collections/{name}/cache")
+async def invalidate_collection_cache(
+    request: Request,
+    name: str,
+    _: UserRecord = Depends(require_admin),
+) -> dict:
+    """Purge all cached search results for one entity (admin only).
+
+    Useful after editing an entity's config.yaml / synonyms.yaml or its data: the
+    exact-match cache (TTL 300s) is not invalidated on file edits, so without this a
+    stale result can be served for up to the TTL. Fast synchronous DELETE — no lock,
+    no background task (same call the sync path already runs after a re-index).
+    """
+    if not _COLLECTION_RE.match(name):
+        raise HTTPException(status_code=422, detail="Invalid collection name")
+    cache_store = getattr(request.app.state, "cache_store", None)
+    if cache_store is None:
+        return {"status": "noop", "detail": "cache disabled"}
+    cache_store.invalidate_collection(name)
+    return {"status": "purged", "collection": name}
+
+
 @router.get("/collections/{name}/load-status")
 async def collection_load_status(
     request: Request,

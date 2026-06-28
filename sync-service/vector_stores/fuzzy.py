@@ -54,15 +54,26 @@ def _levenshtein_variants(
 
 
 def _italian_variants(term: str) -> list[str]:
-    """Generate Italian singular/plural variants via 4 suffix rules.
+    """Generate Italian number (singular/plural) and gender (m/f) variants.
 
-    Rules:
-      -o  -> -i  (maschile: libro -> libri)
-      -a  -> -e  (femminile: tavola -> tavole)
+    Number rules:
+      -o  -> -i  (libro -> libri)
+      -a  -> -e  (tavola -> tavole)
       -e  -> -i  (chiave -> chiavi)
-      -i  -> -o, -a  (libri -> libro, libra)
+      -i  -> -o, -a, -e  (libri -> libro/libra; commerciali -> commerciale)
+
+    Gender rules (maschile <-> femminile):
+      -tore  -> -trice   (collaboratore -> collaboratrice)
+      -trice -> -tore    (direttrice -> direttore)
+      -essa  -> -e       (dottoressa -> dottore)
+      -o     -> -a       (maestro -> maestra)
+      -a     -> -o       (maestra -> maestro)
+      -e     -> -essa    (dottore -> dottoressa)
 
     Pure Python — no dependencies. Works regardless of python-Levenshtein availability.
+    Gender rules over-generate on non-person nouns (libro -> libra), but those land as
+    extra OR terms that simply match nothing — recall up, precision cost negligible on
+    the 1-2 term queries this is gated to.
 
     Args:
         term: input word (lowercased internally)
@@ -72,6 +83,7 @@ def _italian_variants(term: str) -> list[str]:
     """
     t = term.lower()
     variants: list[str] = []
+    # number
     if t.endswith("o"):
         variants.append(t[:-1] + "i")
     elif t.endswith("a"):
@@ -79,8 +91,28 @@ def _italian_variants(term: str) -> list[str]:
     elif t.endswith("e"):
         variants.append(t[:-1] + "i")
     elif t.endswith("i"):
-        variants.extend([t[:-1] + "o", t[:-1] + "a"])
-    return [v for v in variants if v != t]
+        # plural -i can come from -o (libro), -a (rare), or -e (commerciale) singulars
+        variants.extend([t[:-1] + "o", t[:-1] + "a", t[:-1] + "e"])
+    # gender — independent rules: -tore is ambiguous (attore->attrice but
+    # dottore->dottoressa), so both forms are emitted; the wrong one matches nothing.
+    if t.endswith("tore"):
+        variants.append(t[:-4] + "trice")
+    if t.endswith("trice"):
+        variants.append(t[:-5] + "tore")
+    if t.endswith("essa"):
+        variants.append(t[:-4] + "e")
+    if t.endswith("o"):
+        variants.append(t[:-1] + "a")
+    elif t.endswith("a"):
+        variants.append(t[:-1] + "o")
+    elif t.endswith("e"):
+        variants.append(t[:-1] + "essa")
+    # dedupe, preserve order, exclude the input term itself
+    out: list[str] = []
+    for v in variants:
+        if v != t and v not in out:
+            out.append(v)
+    return out
 
 
 def _apply_fuzzy_expansion(

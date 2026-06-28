@@ -322,4 +322,5 @@ async def info(
         "sync_schedule": cfg.sync.schedule,
         "total_objects": total_objects,
         "max_limit": cfg.api.max_limit,
+        "metadata_fields": cfg.vector_store.metadata_fields,  # filterable fields (UI filter dropdown)
     }

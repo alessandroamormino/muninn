@@ -6,11 +6,13 @@ URL format: http://localhost:6333
 Search modes supported (QDRANT_MODES = hybrid | vector | bm25 | fts):
   - hybrid: dense KNN + sparse BM25 via RRF fusion (Prefetch + FusionQuery)
   - vector: dense KNN only (Ollama embeddings required)
-  - bm25/fts: scroll with per-term MatchText filter (Snowball + Levenshtein fuzzy expansion).
-              Each query term + Levenshtein-1 vocab variants → separate MatchText conditions
-              in `should` (OR). Each MatchText applies Snowball independently — MatchTextAny
-              does NOT preserve per-variant Snowball stemming. Results scored by field priority
-              (text_fields config order): primary field match → higher score.
+  - bm25:   true BM25 ranking over the sparse index (Qdrant/bm25 model, IDF/TF relevance).
+            Query text is expanded with Levenshtein-1 + Italian-morphology variants first so
+            typo tolerance survives. Multi-field collections RRF-fuse the per-field sparse slots.
+            Negation queries (must_not) fall back to the fts scroll path (BM25 can't rank absence).
+  - fts:    boolean full-text coverage via per-term MatchText scroll (Snowball stemming +
+            Levenshtein fuzzy + field-priority scoring + exact-phrase bonus). Each query term +
+            its variants → separate MatchText conditions; field order = score weight.
 
 Qdrant collection schema per search_mode:
   - hybrid/vector: vectors_config={"dense": VectorParams(size=dims, distance=COSINE)}
@@ -120,10 +122,13 @@ def _score_by_field(
     points: list,
     text_fields: list[str],
     query_variants: list[str],
+    phrase: str = "",
 ) -> list[SearchHit]:
-    """Score FTS/BM25 results by field priority (config order = weight order).
+    """Score FTS results by field priority (config order = weight order).
 
     Score = sum(1.0/(1+i) for each field i whose _fts_{field} payload contains a query variant).
+    Exact-phrase bonus: when `phrase` (the raw multi-word query) appears verbatim in a field,
+    adds 2.0/(1+i) — this is what makes fts honour "phrase search" without a server feature.
     Falls back to score=1.0 when per-field payloads absent (old collections / Snowball-only match).
     Results sorted highest score first.
     """
@@ -131,6 +136,8 @@ def _score_by_field(
         return [SearchHit(properties=p.payload or {}, score=1.0) for p in points]
 
     lower_variants = {v.lower() for v in query_variants}
+    phrase_l = phrase.lower().strip()
+    do_phrase = len(phrase_l.split()) >= 2  # phrase bonus only for multi-word queries
 
     def _field_score(payload: dict) -> float:
         score = 0.0
@@ -138,9 +145,12 @@ def _score_by_field(
             field_text = str(payload.get(f"_fts_{field}", "") or payload.get(field, "") or "")
             if not field_text:
                 continue
-            tokens = set(re.findall(r"[\w]+", field_text.lower()))
+            field_lower = field_text.lower()
+            tokens = set(re.findall(r"[\w]+", field_lower))
             if lower_variants & tokens:
                 score += 1.0 / (1 + i)
+            if do_phrase and phrase_l in field_lower:
+                score += 2.0 / (1 + i)
         return score if score > 0 else 1.0
 
     hits = [
@@ -772,6 +782,69 @@ class QdrantVectorStore(BaseVectorStore):
         # Hybrid/vector mode: no fuzzy vocab (fts/bm25 specific)
         return IndexResult(inserted=inserted, updated=0, skipped=0)
 
+    def _sparse_vector_names(self, collection: str) -> list[str]:
+        """Return the sparse vector slot names of a collection ('sparse' or 'sparse_{field}').
+
+        Lets _bm25_search target whatever the index was built with — single joined slot
+        for one text_field, per-field slots for many — without re-indexing. [] on any error.
+        """
+        try:
+            info = self._client.get_collection(collection)
+            sparse = info.config.params.sparse_vectors or {}
+            return list(sparse.keys())
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _bm25_search(
+        self,
+        query: str,
+        cfg: Any,
+        collection: str,
+        must_conditions: list,
+        limit: int,
+    ) -> list[SearchHit]:
+        """True BM25 ranking via the sparse index built at upsert time.
+
+        Typo tolerance is preserved by expanding the query text with Levenshtein-1 +
+        Italian-morphology variants before it is tokenised into the Qdrant/bm25 model
+        (BM25 itself has no fuzzy matching). Synonyms are already expanded upstream in
+        api/search.py. Multi-field collections RRF-fuse the per-field sparse slots.
+        """
+        lang = getattr(cfg.vector_store.fts, "language", "en")
+        vocab = _fuzzy_vocab.get(collection, frozenset())
+        expanded = " ".join(dict.fromkeys(
+            v
+            for term in (query.split() if query.strip() else [])
+            for v in _apply_fuzzy_expansion(term, vocab, lang=lang).split()
+        )) or query
+        bm25_doc = qmodels.Document(text=expanded, model="Qdrant/bm25")
+        qdrant_filter = qmodels.Filter(must=must_conditions) if must_conditions else None
+
+        sparse_names = self._sparse_vector_names(collection)
+        if "sparse" in sparse_names or not sparse_names:
+            results = self._client.query_points(
+                collection_name=collection,
+                query=bm25_doc,
+                using="sparse",
+                limit=limit,
+                with_payload=True,
+                query_filter=qdrant_filter,
+            )
+        else:
+            # Multi-field collection: RRF-fuse the per-field sparse_{field} slots.
+            results = self._client.query_points(
+                collection_name=collection,
+                prefetch=[
+                    qmodels.Prefetch(query=bm25_doc, using=name, limit=limit * 2)
+                    for name in sorted(sparse_names)
+                ],
+                query=qmodels.FusionQuery(fusion=qmodels.Fusion.RRF),
+                limit=limit,
+                with_payload=True,
+                query_filter=qdrant_filter,
+            )
+        return [SearchHit(properties=p.payload, score=p.score) for p in results.points]
+
     def search(
         self,
         query: str,
@@ -816,7 +889,12 @@ class QdrantVectorStore(BaseVectorStore):
                 for term in must_not_text_terms
             ]
 
-        # --- fts/bm25: per-term MatchText filter + Snowball + fuzzy + field scoring ----
+        # --- bm25: true BM25 ranking over the sparse index (IDF/TF). Negation queries
+        #     can't be ranked by BM25 (no doc to score when terms are absent) → scroll path.
+        if mode == "bm25" and not must_not_text_terms:
+            return self._bm25_search(query, cfg, collection, must_conditions, limit)
+
+        # --- fts (+ bm25 negation fallback): per-term MatchText + Snowball + fuzzy + phrase ---
         if mode in ("bm25", "fts"):
             _resolved_match_mode = match_mode_override or getattr(
                 cfg.vector_store.fts, "match_mode", "and"
@@ -861,7 +939,7 @@ class QdrantVectorStore(BaseVectorStore):
                 for term in (query.split() if query.strip() else [])
                 for v in _apply_fuzzy_expansion(term, vocab, lang=lang).split()
             ))
-            return _score_by_field(fts_points, text_fields_order, all_variants)
+            return _score_by_field(fts_points, text_fields_order, all_variants, phrase=query)
 
         # NOTE: Qdrant does NOT lowercase first char (unlike Weaviate) — campo used as-is
         qdrant_filter = None
